@@ -1,0 +1,38 @@
+[
+    {
+        "name": "Invoice Handler",
+        "conditions": {
+            "subject": ".*invoice.*",
+            "from": ".*@company\\.com"
+        },
+        "actions": [
+            {
+                "type": "label",
+                "value": "Invoices"
+            },
+            {
+                "type": "save_attachment",
+                "path": "invoices"
+            }
+        ]
+    },
+    {
+        "name": "Important Emails",
+        "conditions": {
+            "from": "boss@company\\.com"
+        },
+        "actions": [
+            {
+                "type": "label",
+                "value": "Important"
+            },
+            {
+                "type": "summarize"
+            },
+            {
+                "type": "auto_reply",
+                "context": "Respond professionally and acknowledge receipt"
+            }
+        ]
+    }
+]

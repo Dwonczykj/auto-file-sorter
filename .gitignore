@@ -164,3 +164,5 @@ temp/
 .ruff_cache/
 .vscode/
 auto_file_sorter/configs.json
+Google Cloud Credentials.json
+gmail_token.json

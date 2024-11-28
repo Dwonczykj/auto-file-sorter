@@ -1,26 +1,13 @@
-"""Module containing useful utilities."""
-
-from __future__ import annotations
-
-__all__: list[str] = ["resolved_path_from_str"]
-
-from pathlib import Path
 import logging
 import os
 from typing import Literal, Optional, Type, TypeGuard, TypeVar, Union
-from enum import Enum
+from enum import EnumType, Enum
 from datetime import timedelta
 from datetime import datetime
 import dateutil.parser
 import pytz
 import random
 import string
-
-
-def resolved_path_from_str(path_as_str: str) -> Path:
-    """Return the absolute path given a string of a path."""
-    return Path(path_as_str.strip()).resolve()
-
 
 EnumType = TypeVar('EnumType', bound=Enum)
 T = TypeVar('T', bound=Optional[Enum])
