@@ -1,0 +1,57 @@
+{
+    "**recipe_constraints**": "recipe_constraints.json",
+    "calories": {
+        "max": 1890,
+        "min": 1200
+    },
+    "protein": {
+        "max": 210,
+        "min": 170
+    },
+    "lipids_pcnt_non_protein_calories": {
+        "max": 30,
+        "min": 10
+    },
+    "cooking_time_minutes": {
+        "max": 20,
+        "min": 1
+    },
+    "serving_sizes": {
+        "$values": [
+            "none",
+            "small",
+            "medium",
+            "large"
+        ],
+        "default": "large",
+        "lunch": {
+            "max": "large",
+            "min": "medium"
+        },
+        "dinner": {
+            "max": "large",
+            "min": "medium"
+        }
+    },
+    "left_overs": "yes",
+    "supplements": {
+        "creatine": "5g"
+    },
+    "meal_frequency": {
+        "max": 3,
+        "min": 2
+    },
+    "generation_arguments": {
+        "breakdowns": {
+            "$values": [
+                "daily",
+                "per_meal",
+                "per_ingredient"
+            ],
+            "macros_breakdown": "per_ingredient",
+            "micronutrients_breakdown": "per_meal",
+            "cost_gbp_breakdown": "per_meal"
+        },
+        "micronutrients_include": "yes"
+    }
+}

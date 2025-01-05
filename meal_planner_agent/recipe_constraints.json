@@ -1,0 +1,118 @@
+{
+    "calories": {
+        "max": 750,
+        "min": 150
+    },
+    "protein": {
+        "max": 120,
+        "min": 20
+    },
+    "lipids_pcnt_non_protein_calories": {
+        "max": 30,
+        "min": 10
+    },
+    "micronutrients_rda": {
+        "vitamin_b12": 2,
+        "vitamin_b6": 2,
+        "vitamin_d": 1.5,
+        "vitamin_c": 1.5,
+        "iron": 1.5,
+        "zinc": 1.5,
+        "magnesium": 1.5,
+        "selenium": 1.5,
+        "vitamin_a": 1.5,
+        "vitamin_e": 1.5,
+        "vitamin_k": 1.5,
+        "vitamin_b1": 1.5,
+        "vitamin_b2": 1.5,
+        "vitamin_b3": 1.5,
+        "vitamin_b5": 1.5,
+        "vitamin_b7": 1.5,
+        "vitamin_b9": 1.5,
+        "omega_3_dha": 1.5,
+        "omega_3_epa": 1.5
+    },
+    "meal_frequency": {
+        "max": 3,
+        "min": 2
+    },
+    "sex": "male",
+    "DoB": "1993-04-27",
+    "height": 181,
+    "weight": 89,
+    "daily_steps": 12000,
+    "activity_level": "sedentary",
+    "goal": "lose_weight",
+    "dietary_restrictions": {
+        "$values": [
+            "gluten",
+            "dairy",
+            "soy",
+            "nuts",
+            "shellfish",
+            "fish",
+            "eggs"
+        ],
+        "$enum": [
+            "none",
+            "low",
+            "normal",
+            "no",
+            "yes"
+        ],
+        "gluten": "low",
+        "dairy": "none",
+        "soy": "normal",
+        "nuts": "normal",
+        "shellfish": "normal",
+        "fish": "normal",
+        "eggs": "none",
+        "meat": "none",
+        "vegetarian": "yes",
+        "pescetarian": "yes",
+        "carnivore": "no"
+    },
+    "ingredients_to_avoid": [
+        "salmon",
+        "walnuts",
+        "rice",
+        "pizza"
+    ],
+    "ingredients_to_avoid_in_recipes": [
+        "garlic"
+    ],
+    "ingredients_to_include": [
+        "goats cheese",
+        "quorn",
+        "pumpkin seeds",
+        "nutritional yeast"
+    ],
+    "ingredients_I_love": [
+        "tenderstem broccoli",
+        "asparagus",
+        "mushrooms",
+        "peas"
+    ],
+    "cuisine_preferences": [
+        "healthy",
+        "Mediterranean",
+        "Mexican",
+        "Greek",
+        "Asian",
+        "Thai",
+        "Lebanese"
+    ],
+    "generation_arguments": {
+        "breakdowns": {
+            "$values": [
+                "daily",
+                "per_meal",
+                "per_ingredient"
+            ],
+            "macros_breakdown": "per_ingredient",
+            "micronutrients_breakdown": "per_meal",
+            "cost_gbp_breakdown": "per_meal"
+        },
+        "micronutrients_include": "yes"
+    }
+}

@@ -150,12 +150,6 @@ def log_request_details(response: Callable[[], T]) -> T:
 
 
 @dataclass
-class _StructuredOutputWhatsappTemplateResponse():
-    response: StructuredOutput
-    total_tokens_used: int
-
-
-@dataclass
 class _ChatCompletionResponse():
     response: str
     total_tokens_used: int

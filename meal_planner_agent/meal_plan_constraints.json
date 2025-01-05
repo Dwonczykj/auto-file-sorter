@@ -1,0 +1,26 @@
+{
+    "**recipe_constraints**": "recipe_constraints.json",
+    "**day_constraints**": "day_constraints.json",
+    "budget_per_week_gbp": {
+        "max": 100,
+        "min": 30
+    },
+    "left_overs": "yes",
+    "variety_repitition": {
+        "total_recipes_per_week": 5,
+        "total_ingredients_per_week": 30
+    },
+    "generation_arguments": {
+        "breakdowns": {
+            "$values": [
+                "daily",
+                "per_meal",
+                "per_ingredient"
+            ],
+            "macros_breakdown": "per_ingredient",
+            "micronutrients_breakdown": "per_meal",
+            "cost_gbp_breakdown": "per_meal"
+        },
+        "micronutrients_include": "yes"
+    }
+}
