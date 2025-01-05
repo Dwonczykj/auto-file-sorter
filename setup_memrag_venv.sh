@@ -1,5 +1,5 @@
 #!/bin/bash
-venv_name="auto_file_sorter_venv"
+venv_name="memrag_venv"
 
 rm -rf "$venv_name"
 
@@ -23,37 +23,36 @@ echo "Installing dependencies..."
 # Upgrade pip and install build tools
 pip install --upgrade pip setuptools wheel
 
-# Install PyTorch first
+# Install PyTorch and CUDA dependencies
 pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install ninja triton
 
-# Install CUDA toolkit if needed
-if [[ "$(uname)" == "Linux" ]]; then
-    sudo apt-get install -y nvidia-cuda-toolkit
-fi
+# Install memorag and its core dependencies
+pip install memorag==0.1.3
+pip install flash-attn --no-deps
+pip install -U bitsandbytes
+pip install faiss-cpu # Use faiss-gpu if GPU is available
 
-# Install transformers and its dependencies
+# Install document processing dependencies
+pip install python-docx PyPDF2
+pip install tiktoken
 pip install transformers accelerate
 
-# Install memorag dependencies first
-pip install ninja
-pip install triton
-
-# Try installing memorag with specific version
-pip install "memorag>=0.1.5,<0.2.0"
-
-# Install other dependencies
-pip install deepdiff decouple pytz python-dateutil
-pip install requests python-dotenv pyngrok watchdog
-pip install pathlib
-pip install pydub audioread Pillow pycryptodome
-pip install "tiktoken<0.5.0" openai anthropic
-pip install "langchain>=0.0.350" langchain_anthropic langchain_openai langchain_core langchain_community
-pip install PyPDF2 nltk mutagen python-docx python-pptx openpyxl
-pip install fpdf bs4
-pip install google-auth google_auth_oauthlib google-api-python-client
-pip install fastapi uvicorn websockets
+# Install utility dependencies
+pip install python-dotenv
+pip install tqdm
+pip install requests
 
 echo "Virtual environment created: $VIRTUAL_ENV"
+
+# Create necessary directories
+mkdir -p memrag/{core,utils,models,data/{cache,documents}}
+
+# Create __init__.py files
+touch memrag/__init__.py
+touch memrag/core/__init__.py
+touch memrag/utils/__init__.py
+touch memrag/models/__init__.py
 
 # Generate requirements file
 pip freeze >requirements.txt
@@ -62,5 +61,7 @@ echo "requirements.txt file created"
 # Verify installations
 echo "Verifying key installations..."
 python -c "import torch; print(f'PyTorch version: {torch.__version__}')"
-python -c "import transformers; print(f'Transformers version: {transformers.__version__}')"
 python -c "import memorag; print(f'Memorag version: {memorag.__version__}')"
+python -c "import transformers; print(f'Transformers version: {transformers.__version__}')"
+
+echo "Setup complete! Use 'source memrag_venv/bin/activate' to activate the virtual environment."

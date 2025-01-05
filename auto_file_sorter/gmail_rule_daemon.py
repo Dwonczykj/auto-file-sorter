@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 import base64
 import os
 import re
@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
-from googleapiclient.discovery import build
+from googleapiclient.discovery import build, Resource
 from googleapiclient.errors import HttpError
 import fpdf
 import time
@@ -18,9 +18,18 @@ import json
 import httpx
 import csv
 from urllib.parse import urlparse
+from abc import ABC, abstractmethod
+from auto_file_sorter.gmail_service_types import GmailServiceProtocol
 
 from ai_service import AIService, ChatCompletionMessageInput
 from auto_file_sorter.logging.logging_config import configure_logging
+from auto_file_sorter.auth_base import GoogleServiceAuth
+from auto_file_sorter.db.gmail_db import GmailDatabase
+from langchain.output_parsers import ResponseSchema, StructuredOutputParser
+from langchain.prompts import PromptTemplate
+from auto_file_sorter.models.unsubscribe_link import UnsubscribeLinkOutput
+from email_validator import validate_email, EmailNotValidError
+from auto_file_sorter.models.archive_decision import ArchiveDecisionOutput
 
 configure_logging()
 
@@ -59,6 +68,12 @@ class GmailFilterAction:
 
 
 @dataclass
+class NLRuleOutput:
+    id: int
+    name: str
+
+
+@dataclass
 class GmailFilter:
     from_: str = ""  # Using from_ to avoid Python keyword
     to: str = ""
@@ -72,48 +87,57 @@ class GmailFilter:
     action: GmailFilterAction = field(default_factory=GmailFilterAction)
 
 
-class GmailAutomation:
+# Define response schemas
+NL_RULE_SCHEMAS = [
+    ResponseSchema(
+        name="id",
+        description="List of rule IDs that match the email content",
+        type="list"
+    ),
+    ResponseSchema(
+        name="name",
+        description="Name of the matched rule",
+        type="string"
+    )
+]
+
+
+class GmailAutomation(GoogleServiceAuth):
     """Class to handle Gmail automation tasks with AI integration"""
 
-    SCOPES = [
-        'https://www.googleapis.com/auth/gmail.modify',
-        'https://www.googleapis.com/auth/gmail.settings.basic',
-        'https://www.googleapis.com/auth/gmail.settings.sharing'
-    ]
+    service: GmailServiceProtocol
 
-    def __init__(self, credentials_path: str, token_path: str, ai_service: AIService):
+    @property
+    def SCOPES(self) -> List[str]:
+        return [
+            'https://www.googleapis.com/auth/gmail.modify',
+            'https://www.googleapis.com/auth/gmail.settings.basic',
+            'https://www.googleapis.com/auth/gmail.settings.sharing'
+        ]
+
+    def __init__(self, credentials_path: str, token_path: str, ai_service: AIService, db: GmailDatabase):
         """Initialize Gmail automation with OAuth2 credentials and AI service"""
-        self.credentials_path = credentials_path
-        self.token_path = token_path
-        self.service = self._authenticate()
+        super().__init__(credentials_path, token_path)
         self.ai_service = ai_service
         self.unread_tracking: Set[UnreadTracker] = set()
+        self.db = db
+        self.authenticate()
+        # Initialize the parser
+        self.nl_rule_parser = StructuredOutputParser.from_response_schemas(
+            NL_RULE_SCHEMAS)
 
-    def _authenticate(self) -> Any:
-        """Handle Gmail API authentication"""
-        creds = None
-        if os.path.exists(self.token_path):
-            creds = Credentials.from_authorized_user_file(
-                self.token_path, self.SCOPES)
-
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    self.credentials_path, self.SCOPES)
-                creds = flow.run_local_server(port=0)
-
-            with open(self.token_path, 'w') as token:
-                token.write(creds.to_json())
-
-        return build('gmail', 'v1', credentials=creds)
+    def _build_service(self, credentials: Credentials) -> GmailServiceProtocol:
+        """Build the Gmail API service"""
+        service = build('gmail', 'v1', credentials=credentials)
+        assert isinstance(service, GmailServiceProtocol)
+        return service
 
     async def summarize_email(self, message_id: str) -> str:
         """Summarize email content using AI service"""
         try:
             # Get email content
             message = self.service.users().messages().get(
+                # TODO: Fix this linter error
                 userId='me', id=message_id, format='full').execute()
 
             # Extract email body
@@ -448,42 +472,176 @@ Subject: Re: {subject}
             logging.error(f'Error creating folder {folder_name}: {error}')
             return None
 
+    async def block_sender(self, sender_email: str) -> Tuple[bool, str]:
+        """
+        Block a specific email address
+        Returns (success, message)
+        """
+        try:
+            # Validate email format
+            validate_email(sender_email)
+
+            # Add to database
+            rule_id = self.db.create_blocked_sender(sender_email, "email")
+            if rule_id:
+                logging.info(f"Blocked sender: {sender_email}")
+                return True, f"Successfully blocked {sender_email}"
+            return False, "Failed to add to database"
+
+        except EmailNotValidError as e:
+            error_msg = f"Invalid email address: {str(e)}"
+            logging.error(error_msg)
+            return False, error_msg
+        except Exception as e:
+            error_msg = f"Error blocking sender: {str(e)}"
+            logging.error(error_msg)
+            return False, error_msg
+
+    async def block_domain(self, domain_name: str) -> Tuple[bool, str]:
+        """
+        Block an entire domain
+        Returns (success, message)
+        """
+        try:
+            # Validate domain format
+            domain_pattern = r'^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
+            if not re.match(domain_pattern, domain_name):
+                error_msg = f"Invalid domain format: {domain_name}"
+                logging.error(error_msg)
+                return False, error_msg
+
+            # Create pattern to match all emails from this domain
+            pattern = f".*@{re.escape(domain_name)}$"
+
+            # Add to database
+            rule_id = self.db.create_blocked_sender(pattern, "pattern")
+            if rule_id:
+                logging.info(f"Blocked domain: {domain_name}")
+                return True, f"Successfully blocked domain {domain_name}"
+            return False, "Failed to add to database"
+
+        except Exception as e:
+            error_msg = f"Error blocking domain: {str(e)}"
+            logging.error(error_msg)
+            return False, error_msg
+
+    async def block_body_pattern(self, body_pattern: str) -> Tuple[bool, str]:
+        """
+        Block emails containing specific pattern in body
+        Returns (success, message)
+        """
+        try:
+            # Validate regex pattern
+            try:
+                re.compile(body_pattern)
+            except re.error as e:
+                error_msg = f"Invalid regex pattern: {str(e)}"
+                logging.error(error_msg)
+                return False, error_msg
+
+            # Add to database
+            rule_id = self.db.create_blocked_sender(
+                body_pattern, "body_pattern")
+            if rule_id:
+                logging.info(f"Blocked body pattern: {body_pattern}")
+                return True, f"Successfully blocked pattern: {body_pattern}"
+            return False, "Failed to add to database"
+
+        except Exception as e:
+            error_msg = f"Error blocking body pattern: {str(e)}"
+            logging.error(error_msg)
+            return False, error_msg
+
     async def find_unsubscribe_link(self, message_id: str) -> Tuple[Optional[str], Optional[str]]:
-        """Find unsubscribe link in email headers or body"""
+        """Find unsubscribe link in email headers or body using AI"""
         try:
             message = self.service.users().messages().get(
                 userId='me', id=message_id, format='full').execute()
 
-            # Check List-Unsubscribe header first
+            # Extract email data
             headers = {h['name']: h['value']
                        for h in message['payload']['headers']}
-            if 'List-Unsubscribe' in headers:
-                unsubscribe = headers['List-Unsubscribe']
-                # Extract URL from <> brackets if present
-                url_match = re.search(r'<(https?://[^>]+)>', unsubscribe)
-                if url_match:
-                    return url_match.group(1), 'header'
+            subject = headers.get('Subject', '')
+            from_email = headers.get('From', '')
 
-            # Check email body
-            body = ""
+            # Get email body
+            body_html = ""
+            body_text = ""
             if 'data' in message['payload']['body']:
-                body = base64.urlsafe_b64decode(
+                body_html = base64.urlsafe_b64decode(
                     message['payload']['body']['data']).decode('utf-8')
             elif 'parts' in message['payload']:
                 for part in message['payload']['parts']:
                     if part.get('mimeType') == 'text/html' and 'data' in part['body']:
-                        body = base64.urlsafe_b64decode(
+                        body_html = base64.urlsafe_b64decode(
                             part['body']['data']).decode('utf-8')
-                        break
+                    elif part.get('mimeType') == 'text/plain' and 'data' in part['body']:
+                        body_text = base64.urlsafe_b64decode(
+                            part['body']['data']).decode('utf-8')
 
-            if body:
-                soup = BeautifulSoup(body, 'html.parser')
-                unsubscribe_links = soup.find_all(
-                    'a', href=True, text=re.compile(r'unsubscribe', re.I))
-                if unsubscribe_links:
-                    return unsubscribe_links[0]['href'], 'body'
+            # Create email data structure for AI
+            email_data = {
+                "headers": {
+                    "subject": subject,
+                    "from": from_email,
+                    "list_unsubscribe": headers.get('List-Unsubscribe', '')
+                },
+                "body_html": body_html,
+                "body_text": body_text
+            }
 
-            return None, None
+            # Create system prompt
+            system_prompt = """You are an unsubscribe link detector. Analyze the email and find any unsubscribe links.
+            Rules:
+            1. First check the List-Unsubscribe header - this is the most reliable source
+            2. If no header, look for links in the HTML that contain words like 'unsubscribe', 'opt-out', etc.
+            3. For HTML links, provide the CSS selector path to locate the link
+            4. Never hallucinate or create links - only return real links found in the email
+            5. Assign a confidence score (0.0-1.0) based on how certain you are it's an unsubscribe link
+            6. Explain your reasoning
+
+            Return your findings in the following JSON format:
+            {
+                "link": "the unsubscribe URL or null if none found",
+                "location": "header" or "CSS selector path",
+                "confidence": float between 0.0 and 1.0,
+                "reason": "explanation of your decision"
+            }"""
+
+            # Get AI analysis
+            completion = await self.ai_service.chat_completion(
+                messages=[
+                    ChatCompletionMessageInput(
+                        role="system",
+                        content=system_prompt
+                    ),
+                    ChatCompletionMessageInput(
+                        role="user",
+                        content=json.dumps(email_data, indent=2)
+                    )
+                ]
+            )
+
+            # Parse AI response
+            try:
+                result = UnsubscribeLinkOutput.parse_raw(completion.response)
+
+                if result.link and result.confidence >= 0.7:  # Only return high-confidence results
+                    logging.info(f"Found unsubscribe link with confidence {
+                                 result.confidence}: {result.link}")
+                    logging.info(f"Reason: {result.reason}")
+                    return result.link, result.location
+                else:
+                    if result.reason:
+                        logging.info(f"No reliable unsubscribe link found: {
+                                     result.reason}")
+                    return None, None
+
+            except Exception as e:
+                logging.error(f"Error parsing AI response: {e}")
+                logging.error(f"AI response was: {completion.response}")
+                return None, None
+
         except Exception as e:
             logging.error(f'Error finding unsubscribe link: {e}')
             return None, None
@@ -590,6 +748,498 @@ Subject: Re: {subject}
             json.dump(rules, f, indent=4)
         logging.info(f'Added new rule for {rule["conditions"]["from"]}')
 
+    def _sanitize_label(self, label: str) -> str:
+        r"""Sanitize label to match [A-Za-z\s_\-] pattern"""
+        # First, replace any invalid characters with spaces
+        sanitized = re.sub(r'[^A-Za-z\s_\-]', ' ', label)
+        # Replace multiple spaces with single space
+        sanitized = re.sub(r'\s+', ' ', sanitized)
+        # Trim spaces from start and end
+        return sanitized.strip()
+
+    async def create_synced_label(self, label: str) -> Tuple[bool, Optional[str]]:
+        """
+        Create a label both on Gmail server and local database.
+        Returns (success, error_message)
+        """
+        try:
+            # Sanitize the label
+            sanitized_label = self._sanitize_label(label)
+            if not sanitized_label:
+                return False, "Label is empty after sanitization"
+
+            # Check if label already exists in Gmail
+            existing_labels = self.service.users().labels().list(userId='me').execute()
+            for existing in existing_labels.get('labels', []):
+                if existing['name'].lower() == sanitized_label.lower():
+                    # Label exists, store in local db if not already there
+                    try:
+                        self.db.create_label_with_uri(
+                            sanitized_label,
+                            existing.get('id')  # Gmail API uses id as URI
+                        )
+                    except Exception:
+                        # Ignore if label already exists in local db
+                        pass
+                    return True, None
+
+            # Create new label on Gmail
+            label_body = {
+                'name': sanitized_label,
+                'labelListVisibility': 'labelShow',
+                'messageListVisibility': 'show'
+            }
+
+            try:
+                created_label = self.service.users().labels().create(
+                    userId='me',
+                    body=label_body
+                ).execute()
+
+                # Store in local database
+                label_id = self.db.create_label_with_uri(
+                    sanitized_label,
+                    created_label.get('id')  # Gmail API uses id as URI
+                )
+
+                if label_id is None:
+                    return False, "Failed to store label in local database"
+
+                logging.info(
+                    f"Created label '{sanitized_label}' on Gmail and local database")
+                return True, None
+
+            except HttpError as e:
+                error_message = f"Failed to create label on Gmail: {str(e)}"
+                logging.error(error_message)
+                return False, error_message
+
+        except Exception as e:
+            error_message = f"Unexpected error creating label: {str(e)}"
+            logging.error(error_message)
+            return False, error_message
+
+    async def add_natural_language_rule(self, rule: str, actions: List[Dict[str, Any]]) -> Tuple[bool, str]:
+        """
+        Add a natural language rule with associated actions.
+        Returns (success, message)
+        """
+        if len(rule) > 50:
+            return False, "Rule must be 50 characters or less"
+
+        try:
+            # Validate actions against Gmail SDK actions
+            valid_actions = {"label", "archive",
+                             "delete", "markRead", "star", "forward"}
+            for action in actions:
+                if action.get('type') not in valid_actions:
+                    return False, f"Invalid action type: {action.get('type')}"
+
+            # Add rule to database
+            rule_id = self.db.create_nl_rule(rule, actions)
+            if rule_id is None:
+                return False, "Failed to create rule in database"
+
+            return True, f"Successfully created rule with ID: {rule_id}"
+
+        except Exception as e:
+            error_msg = f"Error creating natural language rule: {str(e)}"
+            logging.error(error_msg)
+            return False, error_msg
+
+    async def process_nl_rules(self, email_content: str) -> Optional[List[Dict[str, Any]]]:
+        """
+        Process natural language rules against email content.
+        Returns list of matching rules and their actions.
+        """
+        try:
+            # Get all rules from database
+            rules = self.db.get_all_nl_rules()
+            if not rules:
+                return None
+
+            # Get format instructions
+            format_instructions = self.nl_rule_parser.get_format_instructions()
+
+            # Create system prompt
+            rules_context = "\n".join(
+                [f"Rule {r['id']}: {r['rule']}" for r in rules])
+            system_prompt = f"""
+            You are an email rule matching system. Given the following rules:
+
+            {rules_context}
+
+            Analyze the email content and return the IDs of any matching rules.
+            {format_instructions}
+            Only return rule IDs if you are highly confident they match.
+            """
+
+            # Create prompt template for LangChain
+            prompt = PromptTemplate(
+                input_variables=["email_content"],
+                template=system_prompt + "\nEmail content: {email_content}"
+            )
+
+            # Get AI response
+            completion = await self.ai_service.chat_completion(
+                messages=[
+                    ChatCompletionMessageInput(
+                        role="system",
+                        content=system_prompt
+                    ),
+                    ChatCompletionMessageInput(
+                        role="user",
+                        content=email_content
+                    )
+                ]
+            )
+
+            # Parse response to get matching rule IDs
+            try:
+                output = self.nl_rule_parser.parse(completion.response)
+                matching_rules = []
+
+                # Get actions for matching rules
+                for rule_id in output['id']:
+                    rule = self.db.get_nl_rule(rule_id)
+                    if rule:
+                        matching_rules.append(rule)
+
+                return matching_rules
+
+            except Exception as e:
+                logging.error(f"Error parsing AI response: {e}")
+                return None
+
+        except Exception as e:
+            logging.error(f"Error processing natural language rules: {e}")
+            return None
+
+    async def apply_nl_rule_actions(self, message_id: str, actions: List[Dict[str, Any]]) -> None:
+        """Apply the actions from a natural language rule
+        ### Example usage: (Apply multiple actions to a message)
+        ```python
+        actions = [
+            {"type": "star"},
+            {"type": "markRead"},
+            {"type": "forward", "to": "someone@example.com"}
+        ]
+        await gmail.apply_nl_rule_actions(message_id, actions)
+        ```
+        """
+        # TODO: Call this based on db stored filters that match emails and then apply the rules defined on the filters from the database.
+        for action in actions:
+            action_type = action.get('type')
+            try:
+                if action_type == 'label':
+                    await self.apply_label([message_id], action['value'])
+                elif action_type == 'archive':
+                    await self._archive_message(message_id)
+                elif action_type == 'delete':
+                    await self._delete_message(message_id)
+                elif action_type == 'markRead':
+                    await self._mark_as_read(message_id)
+                elif action_type == 'star':
+                    await self._star_message(message_id)
+                elif action_type == 'forward':
+                    await self._forward_message(message_id, action.get('to'))
+                else:
+                    logging.warning(f"Unknown action type: {action_type}")
+            except Exception as e:
+                logging.error(f"Error applying action {action_type}: {e}")
+
+    async def _archive_message(self, message_id: str) -> None:
+        """Remove INBOX label to archive message"""
+        try:
+            self.service.users().messages().modify(
+                userId='me',
+                id=message_id,
+                body={
+                    'removeLabelIds': ['INBOX']
+                }
+            ).execute()
+            logging.info(f"Archived message: {message_id}")
+        except HttpError as e:
+            logging.error(f"Error archiving message {message_id}: {e}")
+            raise
+
+    async def _delete_message(self, message_id: str) -> None:
+        """Move message to trash"""
+        try:
+            self.service.users().messages().trash(
+                userId='me',
+                id=message_id
+            ).execute()
+            logging.info(f"Deleted message: {message_id}")
+        except HttpError as e:
+            logging.error(f"Error deleting message {message_id}: {e}")
+            raise
+
+    async def _mark_as_read(self, message_id: str) -> None:
+        """Remove UNREAD label from message"""
+        try:
+            self.service.users().messages().modify(
+                userId='me',
+                id=message_id,
+                body={
+                    'removeLabelIds': ['UNREAD']
+                }
+            ).execute()
+            logging.info(f"Marked message as read: {message_id}")
+        except HttpError as e:
+            logging.error(f"Error marking message {message_id} as read: {e}")
+            raise
+
+    async def _star_message(self, message_id: str) -> None:
+        """Add STARRED label to message"""
+        try:
+            self.service.users().messages().modify(
+                userId='me',
+                id=message_id,
+                body={
+                    'addLabelIds': ['STARRED']
+                }
+            ).execute()
+            logging.info(f"Starred message: {message_id}")
+        except HttpError as e:
+            logging.error(f"Error starring message {message_id}: {e}")
+            raise
+
+    async def _forward_message(self, message_id: str, to_email: str) -> None:
+        """Forward message to specified email address"""
+        if not to_email:
+            logging.error("No 'to' email address provided for forward action")
+            return
+
+        try:
+            # Get original message
+            message = self.service.users().messages().get(
+                userId='me',
+                id=message_id,
+                format='full'
+            ).execute()
+
+            # Extract headers
+            headers = {h['name']: h['value']
+                       for h in message['payload']['headers']}
+            subject = headers.get('Subject', '')
+            from_email = headers.get('From', '')
+
+            # Get message content
+            if 'data' in message['payload']['body']:
+                body = base64.urlsafe_b64decode(
+                    message['payload']['body']['data']).decode('utf-8')
+            elif 'parts' in message['payload']:
+                parts = message['payload']['parts']
+                body = base64.urlsafe_b64decode(
+                    parts[0]['body']['data']).decode('utf-8') if 'data' in parts[0]['body'] else ""
+            else:
+                body = ""
+
+            # Create forward message
+            forward_message = f"""
+From: me
+To: {to_email}
+Subject: Fwd: {subject}
+
+---------- Forwarded message ---------
+From: {from_email}
+Subject: {subject}
+
+{body}
+"""
+            # Encode and send
+            encoded_message = base64.urlsafe_b64encode(
+                forward_message.encode('utf-8')).decode('utf-8')
+
+            self.service.users().messages().send(
+                userId='me',
+                body={
+                    'raw': encoded_message
+                }
+            ).execute()
+            logging.info(f"Forwarded message {message_id} to {to_email}")
+
+        except HttpError as e:
+            logging.error(f"Error forwarding message {message_id}: {e}")
+            raise
+
+    async def auto_archive_emails(self, max_emails: int = 100) -> None:
+        """
+        Automatically archive non-important emails and generate a report
+        """
+        try:
+            # Get unprocessed emails
+            messages = self.service.users().messages().list(
+                userId='me',
+                q='in:inbox -label:auto_archived',
+                maxResults=max_emails
+            ).execute()
+
+            if 'messages' not in messages:
+                return
+
+            archived_emails = []
+            kept_emails = []
+
+            for message in messages['messages']:
+                msg = self.service.users().messages().get(
+                    userId='me', id=message['id'], format='full'
+                ).execute()
+
+                # Extract email data
+                headers = {h['name']: h['value']
+                           for h in message['payload']['headers']}
+                subject = headers.get('Subject', '')
+                from_email = headers.get('From', '')
+                has_attachments = any(
+                    'filename' in part for part in msg['payload'].get('parts', [])
+                    if 'filename' in part
+                )
+
+                # Get email body
+                body = self._get_message_body(msg) or ""
+
+                # Create email context for AI
+                email_data = {
+                    "from": from_email,
+                    "subject": subject,
+                    "body": body[:1000],  # First 1000 chars for context
+                    "has_attachments": has_attachments,
+                    "date": datetime.fromtimestamp(
+                        int(msg['internalDate']) / 1000
+                    ).isoformat()
+                }
+
+                # Get AI decision
+                decision = await self._get_archive_decision(email_data)
+
+                if decision.can_archive and decision.confidence >= 0.8:
+                    # Archive the email
+                    await self._archive_message(message['id'])
+                    # Add auto_archived label
+                    await self.apply_label([message['id']], 'auto_archived')
+
+                    archived_emails.append({
+                        'from': from_email,
+                        'subject': subject,
+                        'reason': decision.reason,
+                        'importance': decision.importance_score
+                    })
+                else:
+                    kept_emails.append({
+                        'from': from_email,
+                        'subject': subject,
+                        'reason': decision.reason,
+                        'importance': decision.importance_score,
+                        'summary': decision.summary
+                    })
+
+            # Generate and send report
+            if archived_emails or kept_emails:
+                await self._send_archive_report(archived_emails, kept_emails)
+
+        except Exception as e:
+            logging.error(f"Error in auto_archive_emails: {e}")
+
+    async def _get_archive_decision(self, email_data: Dict[str, Any]) -> ArchiveDecisionOutput:
+        """Get AI decision on whether to archive an email"""
+        system_prompt = """You are an email importance analyzer. Determine if an email can be safely archived based on these rules:
+
+        Can be archived if:
+        1. Promotional or marketing content
+        2. Automated notifications that don't require action
+        3. Social media updates
+        4. Newsletters without critical content
+        5. Duplicate messages
+
+        Must be kept if:
+        1. Contains action items or requests
+        2. Personal or direct communication
+        3. Important business correspondence
+        4. Financial or legal information
+        5. Time-sensitive content
+
+        Return your analysis in JSON format with these fields:
+        {
+            "can_archive": boolean,
+            "confidence": float (0-1),
+            "reason": "explanation of decision",
+            "importance_score": float (0-1),
+            "summary": "brief summary if important, null if not"
+        }"""
+
+        try:
+            completion = await self.ai_service.chat_completion(
+                messages=[
+                    ChatCompletionMessageInput(
+                        role="system",
+                        content=system_prompt
+                    ),
+                    ChatCompletionMessageInput(
+                        role="user",
+                        content=json.dumps(email_data, indent=2)
+                    )
+                ]
+            )
+
+            return ArchiveDecisionOutput.parse_raw(completion.response)
+
+        except Exception as e:
+            logging.error(f"Error getting archive decision: {e}")
+            # Default to not archiving on error
+            return ArchiveDecisionOutput(
+                can_archive=False,
+                confidence=0.0,
+                reason="Error analyzing email",
+                importance_score=0.5
+            )
+
+    async def _send_archive_report(self, archived: List[Dict], kept: List[Dict]) -> None:
+        """Send a report of archived and kept emails"""
+        try:
+            # Create report content
+            report = f"""Email Archive Report - {datetime.now().strftime('%Y-%m-%d %H:%M')}
+
+Archived Emails ({len(archived)}):
+{'=' * 50}
+"""
+            for email in archived:
+                report += f"\nFrom: {email['from']}\nSubject: {
+                    email['subject']}\nReason: {email['reason']}\n"
+
+            report += f"""\n\nKept Emails ({len(kept)}):
+{'=' * 50}
+"""
+            for email in kept:
+                report += f"\nFrom: {email['from']
+                                     }\nSubject: {email['subject']}\n"
+                if email['summary']:
+                    report += f"Summary: {email['summary']}\n"
+                report += f"Reason: {email['reason']}\n"
+
+            # Create message
+            message = f"""From: me
+To: me
+Subject: Email Archive Report - {datetime.now().strftime('%Y-%m-%d')}
+
+{report}
+"""
+            # Encode and send
+            encoded_message = base64.urlsafe_b64encode(
+                message.encode('utf-8')
+            ).decode('utf-8')
+
+            self.service.users().messages().send(
+                userId='me',
+                body={'raw': encoded_message}
+            ).execute()
+
+            logging.info("Sent archive report")
+
+        except Exception as e:
+            logging.error(f"Error sending archive report: {e}")
+
 
 class GmailRuleEngine:
     def __init__(self, gmail_automation: GmailAutomation, rules_file: str):
@@ -597,6 +1247,9 @@ class GmailRuleEngine:
         self.rules_file = rules_file
         self.rules: List[EmailRule] = []
         self.last_check_time = datetime.now().isoformat()
+        self.last_archive_time = datetime.now()
+        # Run auto-archive every 4 hours
+        self.archive_interval = timedelta(hours=4)
         self.load_rules()
 
     def load_rules(self) -> None:
@@ -611,57 +1264,101 @@ class GmailRuleEngine:
             logging.warning(f"Rules file not found: {self.rules_file}")
             self.rules = []
 
+    async def run_scheduled_tasks(self) -> None:
+        """Run scheduled tasks like auto-archiving"""
+        try:
+            current_time = datetime.now()
+
+            # Check if it's time to run auto-archive
+            if current_time - self.last_archive_time >= self.archive_interval:
+                logging.info("Running scheduled auto-archive")
+                await self.gmail.auto_archive_emails(max_emails=100)
+                self.last_archive_time = current_time
+
+        except Exception as e:
+            logging.error(f"Error in scheduled tasks: {e}")
+
     async def process_message(self, message: Dict[str, Any]) -> None:
         """Process a single message against all rules"""
-        # First check if sender is blocked
-        if await self.check_blocked_sender(message):
-            # Move to trash or apply blocked label
-            await self.gmail.apply_label([message['id']], 'Blocked')
-            logging.info(f"Blocked message {
-                         message['id']} from blocked sender")
-            return
+        try:
+            # First check if sender is blocked
+            if await self.check_blocked_sender(message):
+                await self.gmail.apply_label([message['id']], 'Blocked')
+                logging.info(f"Blocked message {
+                             message['id']} from blocked sender")
+                return
 
-        # Continue with existing rule processing...
-        headers = {h['name']: h['value']
-                   for h in message['payload']['headers']}
+            headers = {h['name']: h['value']
+                       for h in message['payload']['headers']}
 
-        for rule in self.rules:
-            matches = True
-            for field, pattern in rule.conditions.items():
-                if field in headers:
-                    if not re.search(pattern, headers[field], re.IGNORECASE):
+            # Check for auto-archive conditions first
+            if await self._should_auto_archive(message):
+                await self.gmail.auto_archive_emails(max_emails=1)
+                return
+
+            # Continue with regular rule processing
+            for rule in self.rules:
+                matches = True
+                for field, pattern in rule.conditions.items():
+                    if field in headers:
+                        if not re.search(pattern, headers[field], re.IGNORECASE):
+                            matches = False
+                            break
+                    else:
                         matches = False
                         break
-                else:
-                    matches = False
-                    break
 
-            if matches:
-                await self.apply_actions(message['id'], rule.actions)
-                logging.info(f"Applied rule '{
-                             rule.name}' to message {message['id']}")
+                if matches:
+                    await self.apply_actions(message['id'], rule.actions)
+                    logging.info(f"Applied rule '{
+                                 rule.name}' to message {message['id']}")
 
-    async def apply_actions(self, message_id: str, actions: List[Dict[str, Any]]) -> None:
-        """Apply the specified actions to a message"""
-        for action in actions:
-            action_type = action['type']
-            try:
-                if action_type == 'label':
-                    await self.gmail.apply_label([message_id], action['value'])
-                elif action_type == 'summarize':
-                    summary = await self.gmail.summarize_email(message_id)
-                    logging.info(f"Email summary: {summary}")
-                elif action_type == 'auto_reply':
-                    await self.gmail.auto_reply(message_id, action.get('context', ''))
-                elif action_type == 'save_attachment':
-                    save_path = Path(action.get('path', 'attachments'))
-                    await self.gmail.save_attachments('', '', save_path)
-            except Exception as e:
-                logging.error(f"Error applying action {action_type}: {str(e)}")
+        except Exception as e:
+            logging.error(f"Error processing message: {e}")
+
+    async def _should_auto_archive(self, message: Dict[str, Any]) -> bool:
+        """Check if message meets auto-archive criteria"""
+        try:
+            headers = {h['name']: h['value']
+                       for h in message['payload']['headers']}
+            from_email = headers.get('From', '')
+            subject = headers.get('Subject', '')
+            body = self._get_message_body(message) or ""
+
+            # Create email context for AI
+            email_data = {
+                "from": from_email,
+                "subject": subject,
+                "body": body[:1000],
+                "has_attachments": self._has_attachments(message)
+            }
+
+            # Get AI decision
+            decision = await self.gmail._get_archive_decision(email_data)
+            return decision.can_archive and decision.confidence >= 0.8
+
+        except Exception as e:
+            logging.error(f"Error checking auto-archive criteria: {e}")
+            return False
+
+    def _has_attachments(self, message: Dict[str, Any]) -> bool:
+        """Check if message has attachments"""
+        try:
+            return any(
+                'filename' in part
+                for part in message['payload'].get('parts', [])
+                if 'filename' in part
+            )
+        except Exception:
+            return False
 
     async def check_new_emails(self) -> None:
         """Check for new emails and process them"""
         try:
+            # Run scheduled tasks first
+            await self.run_scheduled_tasks()
+
+            # Process new messages
             query = f'after:{self.last_check_time}'
             messages = self.gmail.service.users().messages().list(
                 userId='me', q=query).execute()
@@ -678,38 +1375,35 @@ class GmailRuleEngine:
             logging.error(f"Error checking new emails: {str(e)}")
 
     def load_blocked_senders(self) -> Set[str]:
-        """Load blocked senders from file"""
-        blocked_file = Path(
-            '/Users/joey/Library/Mobile Documents/iCloud~is~workflow~my~workflows/Documents/blocked_senders.txt')
+        """Load blocked senders from database"""
         blocked_senders = set()
-
-        if blocked_file.exists():
-            with open(blocked_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        blocked_senders.add(line)
-
-        return blocked_senders
+        try:
+            db_patterns = self.gmail.db.get_all_blocked_senders()
+            for pattern in db_patterns:
+                blocked_senders.add(pattern['pattern'])
+            return blocked_senders
+        except Exception as e:
+            logging.error(f"Error loading blocked senders from database: {e}")
+            return set()
 
     async def check_blocked_sender(self, message: Dict[str, Any]) -> bool:
-        """Check if sender is blocked"""
+        """Check if sender is blocked using patterns from database"""
         headers = {h['name']: h['value']
                    for h in message['payload']['headers']}
         from_email = headers.get('From', '')
         body = self._get_message_body(message)
 
-        blocked_senders = self.load_blocked_senders()
+        blocked_patterns = self.gmail.db.get_all_blocked_senders()
 
-        for blocked in blocked_senders:
-            # Check if it's an email address
-            if '@' in blocked and blocked.lower() in from_email.lower():
+        for pattern in blocked_patterns:
+            pattern_text = pattern['pattern']
+            pattern_type = pattern['type']
+
+            if pattern_type == 'email' and pattern_text.lower() in from_email.lower():
                 return True
-            # Check if it's a pattern for From field
-            elif re.search(blocked, from_email, re.IGNORECASE):
+            elif pattern_type == 'pattern' and re.search(pattern_text, from_email, re.IGNORECASE):
                 return True
-            # Check if it's a pattern for body
-            elif body and re.search(blocked, body, re.IGNORECASE):
+            elif pattern_type == 'body_pattern' and body and re.search(pattern_text, body, re.IGNORECASE):
                 return True
 
         return False
@@ -859,24 +1553,28 @@ class GmailRuleEngine:
 
 
 async def main():
+    # Initialize database
+    db = GmailDatabase()
+
     ai_service = AIService.get_instance(model_name="gpt-4")
     gmail = GmailAutomation(
-        credentials_path='/Users/joey/Github_Keep/python_scripts/auto-file-sorter/Google Cloud Credentials.json',
-        token_path='/Users/joey/Github_Keep/python_scripts/auto-file-sorter/gmail_token.json',
-        ai_service=ai_service
+        credentials_path='path/to/credentials.json',
+        token_path='path/to/token.json',
+        ai_service=ai_service,
+        db=db
     )
 
     rule_engine = GmailRuleEngine(gmail, 'email_rules.json')
 
-    # Example of creating a rule from prompt
-    await rule_engine.create_rule_from_prompt(
-        "Create a rule to filter all promotional emails containing 'special offer' and mark them as read"
-    )
-
     logging.info("Starting Gmail Rule Daemon...")
-    while True:
-        await rule_engine.check_new_emails()
-        await asyncio.sleep(60)  # Check every minute
+    try:
+        while True:
+            await rule_engine.check_new_emails()
+            await asyncio.sleep(60)  # Check every minute
+    except KeyboardInterrupt:
+        logging.info("Shutting down Gmail Rule Daemon...")
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":

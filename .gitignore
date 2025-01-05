@@ -163,9 +163,18 @@ temp/
 *.log
 .ruff_cache/
 .vscode/
+.DS_Store
 auto_file_sorter/configs.json
 Google Cloud Credentials.json
 gmail_token.json
+client_secrets*.json
+auto_file_sorter_venv/
+youtube_token.json
+auto_file_sorter/youtube_token.json
+/auto_file_sorter/*.json
+auto_file_sorter_venv_old
+auto_file_sorter_venv
+auto_file_sorter_venv_temp
 auto_file_sorter_venv
 auto_file_sorter_venv/*
 auto_file_sorter_venv_temp
@@ -173,6 +182,9 @@ client_secrets_example.json
 youtube_token.json
 youtube_watch_later_reminders_example_schema.json
 client_secrets.json
+*_venv/*
 node_modules
 *.sqlite
 gitleaks-report.txt
+*.jsonl
+*.faiss

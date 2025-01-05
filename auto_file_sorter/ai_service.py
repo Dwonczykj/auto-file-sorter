@@ -35,6 +35,9 @@ from auto_file_sorter.models.optional_structured_output_parser import Structured
 from models.temporary_file_from_bytes import TemporaryFileFromBytes, TemporaryFileFromStr
 from ai_service_types import ImageGenerationResponse, TranscribeAudioResponse, ChatCompletionMessageInput
 
+# TODO: I need to rewrite the ai_service and types based on what I now know in the @hugging_face_agent_tutorials dir.
+# TODO: the AI service should be a simpler graphed agentic workflow that calls the right tools based on the request, we can then have different services based on if I need multimodal outputs or I can leverage the notebooks on how to generate multimodal ouptut with langgraph.
+# TODO: All we need right now is prompts with RAG from sql, email html and user text.
 
 T = TypeVar('T', requests.Response, OpenAIChatCompletion,
             OpenAITranscription, OpenAIImageResponse, OpenAICompletion)

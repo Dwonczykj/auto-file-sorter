@@ -206,7 +206,8 @@ def _setup_logging(args: argparse.Namespace) -> None:
         stream_handler: logging.StreamHandler[TextIO] = logging.StreamHandler()
         stream_handler.setFormatter(STREAM_HANDLER_FORMATTER)
         stream_handler.setLevel(
-            VERBOSE_OUTPUT_LEVELS.get(args.verbosity_level, MAX_VERBOSITY_LEVEL),
+            VERBOSE_OUTPUT_LEVELS.get(
+                args.verbosity_level, MAX_VERBOSITY_LEVEL),
         )
         handlers.append(stream_handler)
 
@@ -264,6 +265,8 @@ def main() -> int:  # pragma: no cover
     _setup_logging(args)
 
     _check_specified_locations(args)
+
+    # await gmail.auto_archive_emails(max_emails=100) # is set4 to run every 4 hours based on rules config in gmail_rule_daemon.py
 
     main_logger.debug("args=%s", repr(args))
 
