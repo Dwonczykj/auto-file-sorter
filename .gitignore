@@ -166,3 +166,10 @@ temp/
 auto_file_sorter/configs.json
 Google Cloud Credentials.json
 gmail_token.json
+auto_file_sorter_venv
+auto_file_sorter_venv/*
+auto_file_sorter_venv_temp
+client_secrets_example.json
+youtube_token.json
+youtube_watch_later_reminders_example_schema.json
+client_secrets.json
