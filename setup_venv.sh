@@ -4,7 +4,9 @@ venv_name="auto_file_sorter_venv"
 rm -rf "$venv_name"
 
 # Prefer Python 3.11 for better compatibility
-if command -v python3.11 &>/dev/null; then
+if command -v python3.12 &>/dev/null; then
+    python_cmd="python3.12"
+elif command -v python3.11 &>/dev/null; then
     python_cmd="python3.11"
 elif command -v python3.10 &>/dev/null; then
     python_cmd="python3.10"

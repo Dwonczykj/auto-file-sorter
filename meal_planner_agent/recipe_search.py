@@ -1,10 +1,11 @@
+from __future__ import annotations
 from langchain_community.tools import TavilySearchResults
 from langchain.text_splitter import RecursiveCharacterTextSplitter, TokenTextSplitter
 from langchain_community.document_loaders import WebBaseLoader
 from langchain.chains import create_extraction_chain
 from langchain_openai import ChatOpenAI
 import os
-from typing import List, Dict, Optional, Set, Tuple
+from typing import Any, Generic, List, Dict, Literal, Optional, Set, Tuple, TypeVar, TypedDict
 import re
 import asyncio
 from bs4 import BeautifulSoup
@@ -52,6 +53,97 @@ class Config:
     NESTED_LINKS_MAX_RECURSION_LEVEL = 2
     MIN_PROBABILITY_OF_RECIPE_IN_URL_PATH = 0.49
     RECIPE_SEARCH_MAX_LLM_CALLS = 100  # Maximum number of LLM calls per session
+
+
+TSLI = TypeVar('TSLI', bound=Literal['integer', 'string', 'boolean'])
+
+
+class _SchemaTypeVal(TypedDict, Generic[TSLI]):
+    type: TSLI
+
+
+class _SchemaTypeList(TypedDict, Generic[TSLI]):
+    type: Literal['array']
+    items: _SchemaTypeVal[TSLI]
+
+
+class _SchemaTypeObject(TypedDict, Generic[TSLI]):
+    type: Literal['object']
+    properties: Dict[str, _SchemaTypeVal[TSLI]]
+
+
+TSVI = TypeVar('TSVI', bound=int | _SchemaTypeVal[Literal['integer']])
+TSAI = TypeVar('TSAI', bound=list[int] | _SchemaTypeList[Literal['integer']])
+TSDI = TypeVar('TSDI', bound=dict[str, int] |
+               _SchemaTypeObject[Literal['integer']])
+TSVS = TypeVar('TSVS', bound=str | _SchemaTypeVal[Literal['string']])
+TSAS = TypeVar('TSAS', bound=list[str] | _SchemaTypeList[Literal['string']])
+TSDS = TypeVar('TSDS', bound=dict[str, str] |
+               _SchemaTypeObject[Literal['string']])
+TSVB = TypeVar('TSVB', bound=bool | _SchemaTypeVal[Literal['boolean']])
+TSAB = TypeVar('TSAB', bound=list[bool] | _SchemaTypeList[Literal['boolean']])
+TSDB = TypeVar('TSDB', bound=dict[str, bool] |
+               _SchemaTypeObject[Literal['boolean']])
+# TSI = TSVI | TSDI | TSAI
+# TSB = TSVB | TSDB | TSAB
+# TSS = TSVS | TSDS | TSAS
+TSI = TypeVar('TSI', bound=int | _SchemaTypeVal[Literal['integer']] |
+              _SchemaTypeList[Literal['integer']] | _SchemaTypeObject[Literal['integer']])
+TSB = TypeVar('TSB', bound=bool | _SchemaTypeVal[Literal['boolean']] |
+              _SchemaTypeList[Literal['boolean']] | _SchemaTypeObject[Literal['boolean']])
+TSS = TypeVar('TSS', bound=str | _SchemaTypeVal[Literal['string']] |
+              _SchemaTypeList[Literal['string']] | _SchemaTypeObject[Literal['string']])
+
+
+class ExtractRecipeDataSchemaMacros(TypedDict, Generic[TSI]):
+    protein: TSI
+    carbs: TSI
+    fat: TSI
+
+
+class ExtractRecipeDataSchemaMicros(TypedDict, Generic[TSI]):
+    vitamin_a: TSI
+    vitamin_c: TSI
+    vitamin_d: TSI
+    vitamin_e: TSI
+    vitamin_k: TSI
+    calcium: TSI
+    iron: TSI
+    magnesium: TSI
+    phosphorus: TSI
+
+
+class ExtractRecipeDataSchemaDietaryInfo(TypedDict, Generic[TSB]):
+    vegetarian: TSB
+    vegan: TSB
+    gluten_free: TSB
+
+
+class ExtractRecipeDataSchemaProperties(TypedDict, Generic[TSI, TSS, TSB]):
+    """
+    Properties of the recipe data schema.
+    """
+    recipe_name: TSS
+    calories_per_serving: TSI
+    is_recipe: TSB
+    servings: TSI
+    title: TSS
+    calories: TSI
+    macros: ExtractRecipeDataSchemaMacros[TSI] | _SchemaTypeObject[Literal["integer"]]
+    micros: ExtractRecipeDataSchemaMicros[TSI] | _SchemaTypeObject[Literal["integer"]]
+    images: list[TSS] | _SchemaTypeList[Literal["string"]]
+    cooking_time_minutes: TSI
+    ingredients: list[TSS] | _SchemaTypeList[Literal["string"]]
+    instructions: list[TSS] | _SchemaTypeList[Literal["string"]]
+    dietary_info: ExtractRecipeDataSchemaDietaryInfo[TSB] | _SchemaTypeObject[Literal["boolean"]]
+    content: TSS
+    url: TSS
+    last_updated: TSS
+
+
+class ExtractRecipeDataSchema(TypedDict, Generic[TSI, TSS, TSB]):
+    properties: ExtractRecipeDataSchemaProperties[TSI, TSS, TSB]
+    required: list[str]
 
 
 class RecipeAnalysisResult(BaseModel):
@@ -177,6 +269,57 @@ class RecipeSearch:
         self.output_parser = PydanticOutputParser(
             pydantic_object=RecipeAnalysisResult)
 
+        self.schema_extract_recipe_data: ExtractRecipeDataSchema[
+            _SchemaTypeVal[Literal["integer"]],
+            _SchemaTypeVal[Literal["string"]],
+            _SchemaTypeVal[Literal["boolean"]]
+        ] = {
+            "properties": {
+                "is_recipe": {"type": "boolean"},
+                "recipe_name": {"type": "string"},
+                "title": {"type": "string"},
+                "calories": {"type": "integer"},
+                "calories_per_serving": {"type": "integer"},
+                "cooking_time_minutes": {"type": "integer"},
+                "servings": {"type": "integer"},
+                "ingredients": {"type": "array", "items": {"type": "string"}},
+                "instructions": {"type": "array", "items": {"type": "string"}},
+                "images": {"type": "array", "items": {"type": "string"}},
+                "content": {"type": "string"},
+                "macros": {
+                    "type": "object",
+                    "properties": {
+                        "protein": {"type": "integer"},
+                        "carbs": {"type": "integer"},
+                        "fat": {"type": "integer"}
+                    }
+                },
+                "micros": {
+                    "type": "object",
+                    "properties": {
+                        "vitamin_a": {"type": "integer"},
+                        "vitamin_c": {"type": "integer"},
+                        "vitamin_d": {"type": "integer"},
+                        "vitamin_e": {"type": "integer"},
+                        "vitamin_k": {"type": "integer"},
+                        "calcium": {"type": "integer"},
+                        "iron": {"type": "integer"},
+                        "magnesium": {"type": "integer"},
+                        "phosphorus": {"type": "integer"}
+                    }
+                },
+                "dietary_info": {
+                    "type": "object",
+                    "properties": {
+                        "vegetarian": {"type": "boolean"},
+                        "vegan": {"type": "boolean"},
+                        "gluten_free": {"type": "boolean"}
+                    }
+                }
+            },
+            "required": ["is_recipe", "recipe_name", "ingredients"]
+        }
+
         # Initialize SQLite in-memory database
         self.conn = sqlite3.connect(':memory:')
         self.cursor = self.conn.cursor()
@@ -281,11 +424,11 @@ class RecipeSearch:
         logging.debug("Initialized browser: %s", self.browser.name)
 
         # Initialize persistent SQLite database
-        self.db_path = Path('recipe_database.sqlite')
-        self.persistent_conn = sqlite3.connect(str(self.db_path))
+        db_path = Path('recipe_database.sqlite')
+        self.persistent_conn = sqlite3.connect(str(db_path))
         self.persistent_cursor = self.persistent_conn.cursor()
 
-        # Create tables if they don't exist
+        # Create recipe_pages table
         self.persistent_cursor.execute('''
             CREATE TABLE IF NOT EXISTS recipe_pages (
                 url TEXT PRIMARY KEY,
@@ -296,20 +439,34 @@ class RecipeSearch:
             )
         ''')
 
+        # Drop and recreate valid_recipes table to match our schema
+        self.persistent_cursor.execute('DROP TABLE IF EXISTS valid_recipes')
         self.persistent_cursor.execute('''
             CREATE TABLE IF NOT EXISTS valid_recipes (
                 url TEXT PRIMARY KEY,
+                recipe_name TEXT,
                 title TEXT,
                 calories INTEGER,
-                cooking_time INTEGER,
-                ingredients TEXT,
+                calories_per_serving INTEGER,
+                cooking_time_minutes INTEGER,
+                servings INTEGER,
+                ingredients TEXT,  -- JSON array
+                instructions TEXT, -- JSON array
                 content TEXT,
-                last_updated DATETIME
+                images TEXT,      -- JSON array
+                last_updated DATETIME,
+                is_recipe BOOLEAN,
+                -- Macros
+                macros TEXT,      -- JSON object
+                -- Micros
+                micros TEXT,      -- JSON object
+                -- Dietary Info
+                dietary_info TEXT -- JSON object
             )
         ''')
         self.persistent_conn.commit()
 
-        # Add table for URL path analysis caching
+        # Create URL path analysis table
         self.persistent_cursor.execute('''
             CREATE TABLE IF NOT EXISTS url_path_analysis (
                 domain TEXT,
@@ -317,9 +474,12 @@ class RecipeSearch:
                 probability REAL,
                 path_type TEXT,
                 last_checked DATETIME,
+                processing_status TEXT,
+                processed_at DATETIME,
                 PRIMARY KEY (domain, path)
             )
         ''')
+
         self.persistent_conn.commit()
 
         # Add LLM call tracking
@@ -809,53 +969,49 @@ class RecipeSearch:
             logging.error("Error extracting links from %s: %s", url, e)
             return []
 
-    async def _validate_recipe(self, content: str) -> Dict:
-        """Use LLM to validate and extract recipe information."""
-        logging.debug(
-            "Validating recipe content length: %d characters", len(content))
-        schema = {
-            "properties": {
-                "is_recipe": {"type": "boolean"},
-                "calories_per_serving": {"type": "integer"},
-                "recipe_name": {"type": "string"},
-                "cooking_time_minutes": {"type": "integer"},
-                "ingredients": {"type": "array", "items": {"type": "string"}},
-                "servings": {"type": "integer"},
-                "macros": {
-                    "type": "object",
-                    "properties": {
-                        "protein": {"type": "number"},
-                        "carbs": {"type": "number"},
-                        "fat": {"type": "number"}
-                    }
-                },
-                "instructions": {"type": "array", "items": {"type": "string"}},
-                "dietary_info": {
-                    "type": "object",
-                    "properties": {
-                        "vegetarian": {"type": "boolean"},
-                        "vegan": {"type": "boolean"},
-                        "gluten_free": {"type": "boolean"}
-                    }
-                }
-            },
-            "required": ["is_recipe", "calories_per_serving", "recipe_name", "ingredients"]
-        }
-
+    async def _extract_recipe_data(self, content: str, url: str) -> Optional[ExtractRecipeDataSchemaProperties[int, str]]:
+        """Extract recipe data from content using LLM."""
         try:
+            schema = self.schema_extract_recipe_data
+
             chain = create_extraction_chain(schema, self.llm)
-            result = await chain.arun(content)
-            recipe_info = result[0] if result else {}
-            logging.debug("Recipe validation result: %s", {
-                "is_recipe": recipe_info.get("is_recipe"),
-                "name": recipe_info.get("recipe_name"),
-                "calories": recipe_info.get("calories_per_serving"),
-                "ingredients_count": len(recipe_info.get("ingredients", []))
-            })
-            return recipe_info
+
+            class RecipeDataChainInvoked(TypedDict):
+                text: list[ExtractRecipeDataSchemaProperties]
+                input: str
+
+            result: RecipeDataChainInvoked = await chain.ainvoke(content)
+
+            if result and len(result['text']) > 0:
+                recipe_data: ExtractRecipeDataSchemaProperties = result['text'][0]
+                recipe_data['url'] = url
+                recipe_data['last_updated'] = datetime.now().isoformat()
+                return recipe_data
+            return None
+
         except Exception as e:
-            logging.error("Error validating recipe: %s", e)
-            return {}
+            logging.error(f"Error extracting recipe data: {e}")
+            return None
+
+    # async def _validate_recipe(self, content: str) -> Dict:
+    #     """Use LLM to validate and extract recipe information."""
+    #     logging.debug(
+    #         "Validating recipe content length: %d characters", len(content))
+    #     try:
+    #         schema = self.schema_extract_recipe_data
+    #         chain = create_extraction_chain(schema, self.llm)
+    #         result = await chain.arun(content)
+    #         recipe_info = result[0] if result else {}
+    #         logging.debug("Recipe validation result: %s", {
+    #             "is_recipe": recipe_info.get("is_recipe"),
+    #             "name": recipe_info.get("recipe_name"),
+    #             "calories": recipe_info.get("calories_per_serving"),
+    #             "ingredients_count": len(recipe_info.get("ingredients", []))
+    #         })
+    #         return recipe_info
+    #     except Exception as e:
+    #         logging.error("Error validating recipe: %s", e)
+    #         return {}
 
     async def _process_recipe_page(self, url: str, min_calories: int, max_calories: int) -> Optional[Dict]:
         """Process a single recipe page and validate it meets the criteria."""
@@ -868,7 +1024,11 @@ class RecipeSearch:
                           url, len(content))
 
             # Validate and extract recipe info
-            recipe_info = await self._validate_recipe(content)
+            # recipe_info = await self._validate_recipe(content)
+            recipe_info = await self._extract_recipe_data(content, url)
+            if not recipe_info:
+                logging.debug("No recipe info found for %s", url)
+                return None
 
             calories = recipe_info.get("calories_per_serving", 0)
             if (recipe_info.get("is_recipe") and
@@ -1058,13 +1218,11 @@ class RecipeSearch:
             return []
 
     def __del__(self):
-        """Clean up resources."""
-        try:
-            self.monitor.stop()
-            self.conn.close()
+        """Cleanup database connections."""
+        if hasattr(self, 'persistent_conn'):
             self.persistent_conn.close()
-        except:
-            pass
+        if hasattr(self, 'conn'):
+            self.conn.close()
 
     def _get_cached_url_probability(self, url: str) -> Optional[float]:
         """Get cached probability for a URL if it exists."""
@@ -1280,27 +1438,40 @@ class RecipeSearch:
             self.persistent_conn.commit()
         except Exception as e:
             logging.error("Error saving recipe page %s: %s", url, e)
+            exit(1)
 
-    def _save_valid_recipe(self, recipe: dict):
+    def _save_valid_recipe(self, recipe: ExtractRecipeDataSchemaProperties):
         """Save or update valid recipe information."""
         try:
             self.persistent_cursor.execute('''
                 INSERT OR REPLACE INTO valid_recipes
-                (url, title, calories, cooking_time,
-                 ingredients, content, last_updated)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (url, recipe_name, title, calories, calories_per_serving,
+                 cooking_time_minutes, servings, ingredients, instructions,
+                 content, images, last_updated, is_recipe,
+                 macros, micros, dietary_info)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 recipe['url'],
+                recipe.get('recipe_name', ''),
                 recipe.get('title', ''),
                 recipe.get('calories', 0),
-                recipe.get('cooking_time', 0),
+                recipe.get('calories_per_serving', 0),
+                recipe.get('cooking_time_minutes', 0),
+                recipe.get('servings', 0),
                 json.dumps(recipe.get('ingredients', [])),
+                json.dumps(recipe.get('instructions', [])),
                 recipe.get('content', ''),
-                datetime.now().isoformat()
+                json.dumps(recipe.get('images', [])),
+                datetime.now().isoformat(),
+                recipe.get('is_recipe', False),
+                json.dumps(recipe.get('macros', {})),
+                json.dumps(recipe.get('micros', {})),
+                json.dumps(recipe.get('dietary_info', {}))
             ))
             self.persistent_conn.commit()
         except Exception as e:
             logging.error("Error saving recipe %s: %s", recipe['url'], e)
+            exit(1)
 
     def _get_cached_path_analysis(self, url: str) -> Optional[Tuple[float, str, str]]:
         """Get cached path analysis if it exists for this URL or its parent paths."""
@@ -1341,24 +1512,99 @@ class RecipeSearch:
             logging.error("Error checking cached path analysis: %s", e)
             return None
 
-    def _save_path_analysis(self, url: str, probability: float, path_type: str):
-        """Save path analysis results to cache."""
+    def _save_path_analysis(self, url: str, probability: float, path_type: str, processing_status: str = 'pending'):
+        """Save path analysis results to cache with processing status."""
         try:
             parsed = urlparse(url)
             self.persistent_cursor.execute('''
                 INSERT OR REPLACE INTO url_path_analysis
-                (domain, path, probability, path_type, last_checked)
-                VALUES (?, ?, ?, ?, ?)
+                (domain, path, probability, path_type, last_checked, processing_status, processed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (
                 parsed.netloc,
                 parsed.path.strip('/'),
                 probability,
                 path_type,
-                datetime.now().isoformat()
+                datetime.now().isoformat(),
+                processing_status,
+                None
             ))
             self.persistent_conn.commit()
         except Exception as e:
             logging.error("Error saving path analysis: %s", e)
+
+    async def process_url(self, url: str) -> Optional[ExtractRecipeDataSchemaProperties]:
+        """Process a URL and determine if it contains a valid recipe."""
+        try:
+            # First check if URL has already been processed
+            parsed = urlparse(url)
+            self.persistent_cursor.execute('''
+                SELECT processing_status
+                FROM url_path_analysis
+                WHERE domain = ? AND path = ?
+            ''', (parsed.netloc, parsed.path.strip('/')))
+
+            result = self.persistent_cursor.fetchone()
+            if result and result[0] not in ['pending', 'error']:
+                logging.info(f"URL already processed with status: {result[0]}")
+                return None
+
+            # Process the URL
+            content = await self._fetch_and_parse_url(url)
+            if not content:
+                self._update_processing_status(url, 'non_recipe')
+                return None
+
+            # Analyze content for recipe
+            recipe_data = await self._extract_recipe_data(content, url)
+
+            if recipe_data and recipe_data.get('is_recipe', False):
+                self._save_valid_recipe(recipe_data)
+                self._update_processing_status(url, 'valid_recipe')
+                return recipe_data
+            else:
+                self._update_processing_status(url, 'invalid_recipe')
+                return None
+
+        except Exception as e:
+            logging.error(f"Error processing URL {url}: {e}")
+            self._update_processing_status(url, 'error')
+            return None
+
+    def _update_processing_status(self, url: str, status: str):
+        """Update the processing status for a URL."""
+        try:
+            parsed = urlparse(url)
+            self.persistent_cursor.execute('''
+                UPDATE url_path_analysis
+                SET processing_status = ?, processed_at = ?
+                WHERE domain = ? AND path = ?
+            ''', (
+                status,
+                datetime.now().isoformat(),
+                parsed.netloc,
+                parsed.path.strip('/')
+            ))
+            self.persistent_conn.commit()
+        except Exception as e:
+            logging.error(f"Error updating processing status: {e}")
+
+    async def _fetch_and_parse_url(self, url: str) -> Optional[str]:
+        """Fetch and parse URL content."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    if response.status != 200:
+                        return None
+                    html = await response.text()
+                    soup = BeautifulSoup(html, 'html.parser')
+                    # Remove script and style elements
+                    for element in soup(['script', 'style']):
+                        element.decompose()
+                    return soup.get_text(separator=' ', strip=True)
+        except Exception as e:
+            logging.error(f"Error fetching URL {url}: {e}")
+            return None
 
 
 def get_input_with_timeout(prompt: str, timeout: int = 3) -> str:
@@ -1479,10 +1725,10 @@ async def test_recipe_search():
             print("-"*30)
             print(f"Title: {recipe['title']}")
             print(f"URL: {recipe['url']}")
-            print(f"Calories per serving: {
-                  recipe.get('calories', 'Not specified')}")
-            print(f"Cooking time: {recipe.get(
-                'cooking_time', 'Not specified')} minutes")
+            print(
+                f"Calories per serving: {recipe.get('calories', 'Not specified')}")
+            print(
+                f"Cooking time: {recipe.get('cooking_time', 'Not specified')} minutes")
 
             if recipe.get('ingredients'):
                 print("\nIngredients:")
@@ -1494,8 +1740,8 @@ async def test_recipe_search():
                          if ing.lower() in recipe.get('content', '').lower()]
             if conflicts:
                 print("\n⚠️  WARNING:")
-                print(f"Recipe contains avoided ingredients: {
-                      ', '.join(conflicts)}")
+                print(
+                    f"Recipe contains avoided ingredients: {', '.join(conflicts)}")
 
             print("\n" + "="*60)
 
@@ -1510,9 +1756,9 @@ async def test_recipe_search():
                     print(
                         f"Recipes {i+1} and {j+1} are: {'Similar' if similarity else 'Different'}")
 
-                    # After recipe search is complete, print URL processing statistics
-                    print("\nURL Processing Statistics:")
-                    print("-"*30)
+        # After recipe search is complete, print URL processing statistics
+        print("\nURL Processing Statistics:")
+        print("-"*30)
 
         history = recipe_searcher.get_url_processing_history()
 
@@ -1526,7 +1772,7 @@ async def test_recipe_search():
 
         print(f"Total URLs processed: {total_urls}")
         print(f"URLs using LLM analysis: {llm_used}")
-        print(f"High probability recipes (≥{
+        print(f"High probability recipes(≥{
             PROBABILITY_OF_RECIPE_IN_URL}): {high_prob}")
         print(f"Average processing time: {avg_time:.2f}s")
 
@@ -1561,6 +1807,113 @@ async def test_recipe_search():
         print(f"Message: {str(e)}")
         raise
 
+
+async def test_recipe_validate_existing_urls():
+    """Process existing URLs from the URL Analysis table and save valid recipes to the database"""
+    try:
+        # Initialize recipe searcher
+        recipe_searcher = RecipeSearch(model=Config.RECIPE_SEARCH_MODEL)
+
+        # Get all unprocessed URLs with high probability
+        recipe_searcher.persistent_cursor.execute('''
+            SELECT domain, path, probability
+            FROM url_path_analysis
+            WHERE (processing_status IS NULL OR processing_status = 'pending')
+            AND probability >= ?
+            ORDER BY probability DESC
+        ''', (Config.MIN_PROBABILITY_OF_RECIPE_IN_URL_PATH,))
+
+        urls_to_process = recipe_searcher.persistent_cursor.fetchall()
+
+        if not urls_to_process:
+            print("No pending URLs to process")
+            return
+
+        print(f"\nProcessing {len(urls_to_process)} URLs...")
+        print("="*60)
+
+        # Process URLs with progress bar
+        valid_recipes = []
+        with tqdm(total=len(urls_to_process), desc="Processing URLs") as pbar:
+            for domain, path, probability in urls_to_process:
+                url = f"https://{domain}/{path}"
+
+                print(f"\nProcessing URL: {url}")
+                print(f"Initial probability: {probability:.2f}")
+
+                recipe_data = await recipe_searcher.process_url(url)
+
+                if recipe_data and recipe_data.get('is_recipe', False):
+                    valid_recipes.append(recipe_data)
+                    print("✅ Valid recipe found!")
+                    print(f"Title: {recipe_data['recipe_name']}")
+                    print(
+                        f"Calories: {recipe_data.get('calories_per_serving', 'Unknown')}")
+                else:
+                    print("❌ No valid recipe found")
+
+                pbar.update(1)
+                await asyncio.sleep(0.5)  # Small delay between requests
+
+        # Print summary
+        print("\n" + "="*60)
+        print("Processing Complete!")
+        print(f"Total URLs processed: {len(urls_to_process)}")
+        print(f"Valid recipes found: {len(valid_recipes)}")
+
+        # Print processing status distribution
+        recipe_searcher.persistent_cursor.execute('''
+            SELECT processing_status, COUNT(*) as count
+            FROM url_path_analysis
+            GROUP BY processing_status
+        ''')
+
+        print("\nProcessing Status Distribution:")
+        for status, count in recipe_searcher.persistent_cursor.fetchall():
+            print(f"{status}: {count}")
+
+    except Exception as e:
+        print(f"\n❌ Error during URL validation: {type(e).__name__}: {str(e)}")
+        raise
+    finally:
+        recipe_searcher.monitor.stop()
+
+
+async def reset_valid_recipes_to_pending():
+    """One-off helper to reset all valid recipes back to pending status."""
+    try:
+        # Initialize database connection
+        db_path = Path('recipe_database.sqlite')
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+
+        # Get count before update
+        cursor.execute('''
+            SELECT COUNT(*) 
+            FROM url_path_analysis 
+            WHERE processing_status = 'valid_recipe'
+        ''')
+        count_before = cursor.fetchone()[0]
+
+        # Update the processing status
+        cursor.execute('''
+            UPDATE url_path_analysis 
+            SET processing_status = 'pending',
+                processed_at = NULL
+            WHERE processing_status = 'valid_recipe'
+        ''')
+
+        # Commit the changes
+        conn.commit()
+
+        print(f"Reset {count_before} valid recipes to pending status")
+
+    except Exception as e:
+        print(f"Error resetting valid recipes: {e}")
+        raise
+    finally:
+        conn.close()
+
 if __name__ == "__main__":
     # Add imports needed for testing
     import json
@@ -1582,12 +1935,16 @@ if __name__ == "__main__":
         print("\nPlease set these variables in your .env file")
         sys.exit(1)
 
-    # Run the test
-    print("🔍 Starting recipe search test...")
+    # Run both tests
     try:
-        asyncio.run(test_recipe_search())
+        # print("🔍 Starting recipe search tests...")
+        # asyncio.run(test_recipe_search())
+        print("🔄 Resetting valid recipes to pending...")
+        asyncio.run(reset_valid_recipes_to_pending())
+        print("\n🔍 Starting URL validation...")
+        asyncio.run(test_recipe_validate_existing_urls())
     except KeyboardInterrupt:
-        print("\n⚠️ Test interrupted by user")
+        print("\n⚠️ Tests interrupted by user")
     except Exception as e:
-        print(f"\n❌ Test failed: {type(e).__name__}: {str(e)}")
+        print(f"\n❌ Tests failed: {type(e).__name__}: {str(e)}")
         raise
