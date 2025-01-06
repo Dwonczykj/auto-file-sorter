@@ -69,6 +69,7 @@
         "eggs": "none",
         "meat": "none",
         "vegetarian": "yes",
+        "vegan": "no",
         "pescetarian": "yes",
         "carnivore": "no"
     },

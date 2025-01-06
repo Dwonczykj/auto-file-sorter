@@ -189,3 +189,4 @@ node_modules
 gitleaks-report.txt
 *.jsonl
 *.faiss
+*.jsonl

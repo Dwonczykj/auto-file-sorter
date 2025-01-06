@@ -34,7 +34,7 @@ import select
 import hashlib
 import faiss
 import numpy as np
-from langchain.embeddings import OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
 from langchain.prompts import PromptTemplate
 from umap import UMAP
@@ -761,6 +761,7 @@ class RecipeSearch:
 
         except Exception as e:
             logging.error("Failed to log URL processing: %s", e)
+            raise e
 
     async def _calculate_recipe_probability(self, url: str, content: str | None = None, use_llm: bool = False) -> float:
         """Calculate probability that a URL points to a recipe page."""
@@ -809,6 +810,7 @@ class RecipeSearch:
             logging.error(
                 "Error calculating recipe probability for %s: %s", url, e)
             probability = 0.0
+            raise e
 
         finally:
             processing_time = time.time() - start_time
@@ -996,6 +998,7 @@ class RecipeSearch:
 
             except Exception as e:
                 logging.error("Error in LLM analysis: %s", e)
+                raise e
                 break
 
         return current_probability
@@ -1074,10 +1077,12 @@ class RecipeSearch:
 
             except Exception as e:
                 logging.error("Failed to parse LLM response: %s", e)
+                raise e
                 return 0.0, "non_recipe", f"Error parsing LLM response: {e}"
 
         except Exception as e:
             logging.error("Error analyzing URL path: %s", e)
+            raise e
             return 0.0, "non_recipe", f"Error: {e}"
 
     @lru_cache(maxsize=100)
@@ -1180,6 +1185,7 @@ class RecipeSearch:
 
         except Exception as e:
             logging.error("Error extracting links from %s: %s", url, e)
+            raise e
             return []
 
     async def _extract_recipe_data(self, content: str, url: str) -> Optional[ExtractRecipeDataSchemaProperties[int, str]]:
@@ -1204,6 +1210,7 @@ class RecipeSearch:
 
         except Exception as e:
             logging.error(f"Error extracting recipe data: {e}")
+            raise e
             return None
 
     # async def _validate_recipe(self, content: str) -> Dict:
@@ -1261,6 +1268,7 @@ class RecipeSearch:
                               recipe_info.get("is_recipe"), calories)
         except Exception as e:
             logging.error("Error processing %s: %s", url, e)
+            raise e
         return None
 
     async def search_recipes(self, min_calories: int = 200, max_calories: int = 750) -> List[Dict]:
@@ -1428,6 +1436,7 @@ class RecipeSearch:
             return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
         except Exception as e:
             logging.error("Failed to retrieve URL processing history: %s", e)
+            raise e
             return []
 
     def __del__(self):
@@ -1450,6 +1459,7 @@ class RecipeSearch:
             return None
         except Exception as e:
             logging.error("Error retrieving cached URL probability: %s", e)
+            raise e
             return None
 
     async def _process_url_batch(self, urls: List[str], min_calories: int, max_calories: int) -> List[Dict]:
@@ -1549,6 +1559,7 @@ class RecipeSearch:
 
         except Exception as e:
             print(f"Error viewing log: {e}")
+            raise e
 
     def analyze_failures(self) -> None:
         """Analyze URLs that failed to be identified as recipes."""
@@ -1607,6 +1618,7 @@ class RecipeSearch:
 
         except Exception as e:
             print(f"Error analyzing failures: {e}")
+            raise e
 
     async def open_in_browser(self, url: str, delay: float = 2.0) -> None:
         """
@@ -1651,6 +1663,7 @@ class RecipeSearch:
             self.persistent_conn.commit()
         except Exception as e:
             logging.error("Error saving recipe page %s: %s", url, e)
+            raise e
             exit(1)
 
     def _save_valid_recipe(self, recipe: ExtractRecipeDataSchemaProperties):
@@ -1701,6 +1714,7 @@ class RecipeSearch:
 
         except Exception as e:
             logging.error("Error saving recipe %s: %s", recipe['url'], e)
+            raise e
             exit(1)
 
     def _get_cached_path_analysis(self, url: str) -> Optional[Tuple[float, str, str]]:
@@ -1740,6 +1754,7 @@ class RecipeSearch:
             return None
         except Exception as e:
             logging.error("Error checking cached path analysis: %s", e)
+            raise e
             return None
 
     def _save_path_analysis(self, url: str, probability: float, path_type: str, processing_status: str = 'pending'):
@@ -1762,6 +1777,7 @@ class RecipeSearch:
             self.persistent_conn.commit()
         except Exception as e:
             logging.error("Error saving path analysis: %s", e)
+            raise e
 
     async def process_url(self, url: str) -> Optional[ExtractRecipeDataSchemaProperties]:
         """Process a URL and determine if it contains a valid recipe."""
@@ -1818,6 +1834,7 @@ class RecipeSearch:
             self.persistent_conn.commit()
         except Exception as e:
             logging.error(f"Error updating processing status: {e}")
+            raise e
 
     async def _fetch_and_parse_url(self, url: str) -> Optional[str]:
         """Fetch and parse URL content."""
@@ -1834,6 +1851,7 @@ class RecipeSearch:
                     return soup.get_text(separator=' ', strip=True)
         except Exception as e:
             logging.error(f"Error fetching URL {url}: {e}")
+            raise e
             return None
 
     def rebuild_faiss_index(self) -> None:

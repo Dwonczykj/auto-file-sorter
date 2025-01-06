@@ -401,6 +401,7 @@ def main():
         "eggs": st.sidebar.selectbox("Eggs", ["none", "low", "normal", "no", "yes"]),
         "meat": st.sidebar.selectbox("Meat", ["none", "low", "normal", "no", "yes"]),
         "vegetarian": st.sidebar.selectbox("Vegetarian", ["none", "low", "normal", "no", "yes"]),
+        "vegan": st.sidebar.selectbox("Vegan", ["none", "low", "normal", "no", "yes"]),
         "pescetarian": st.sidebar.selectbox("Pescetarian", ["none", "low", "normal", "no", "yes"]),
         "carnivore": st.sidebar.selectbox("Carnivore", ["none", "low", "normal", "no", "yes"]),
     }
@@ -429,7 +430,16 @@ def main():
 
     # Personal details
     sex = st.sidebar.selectbox("Sex", ["male", "female", "other"])
-    dob = st.sidebar.date_input("Date of Birth", value=None)
+
+    # Set a reasonable default date (e.g., 30 years ago)
+    default_date = datetime.date.today() - datetime.timedelta(days=365*30)
+    dob = st.sidebar.date_input("Date of Birth", value=default_date)
+
+    # Validate date input
+    if dob and dob >= datetime.date.today():
+        st.sidebar.error("Date of birth cannot be in the future!")
+        dob = default_date
+
     height = st.sidebar.number_input("Height (cm)", min_value=0, value=181)
     weight = st.sidebar.number_input("Weight (kg)", min_value=0, value=89)
     daily_steps = st.sidebar.number_input(
@@ -499,7 +509,7 @@ def main():
             variety_repitition={"total_recipes_per_week": total_recipes_per_week,
                                 "total_ingredients_per_week": total_ingredients_per_week},
             sex=sex,
-            DoB=dob.strftime("%Y-%m-%d"),
+            DoB=dob,  # Now we're sure dob is a valid date
             height=height,
             weight=weight,
             daily_steps=daily_steps,
@@ -566,21 +576,21 @@ class MealPlannerWorkflow:
     def __init__(self):
         self.recipe_searcher = RecipeSearch()
 
-    def find_suitable_recipes(self, constraints: MealPlanConstraints):
+    async def find_suitable_recipes(self, constraints: MealPlanConstraints):
         """Find recipes that match the given constraints."""
-        min_calories = constraints.calories.get("min", 200)
-        max_calories = constraints.calories.get("max", 750)
+        min_calories = constraints.calories.min
+        max_calories = constraints.calories.max
 
         # Consider dietary restrictions
         query_modifiers = []
         if constraints.dietary_restrictions:
-            if constraints.dietary_restrictions.get("vegetarian") in ["yes", "normal"]:
+            if constraints.dietary_restrictions.vegetarian in ["yes", "normal"]:
                 query_modifiers.append("vegetarian")
-            if constraints.dietary_restrictions.get("vegan") in ["yes", "normal"]:
+            if constraints.dietary_restrictions.vegan in ["yes", "normal"]:
                 query_modifiers.append("vegan")
             # Add other dietary restrictions as needed
 
-        recipes = self.recipe_searcher.search_recipes(
+        recipes = await self.recipe_searcher.search_recipes(
             min_calories=min_calories,
             max_calories=max_calories
         )
@@ -597,13 +607,13 @@ class MealPlannerWorkflow:
             if "time" in recipe.get("content", "").lower():
                 # This is a simple check - you might want to use regex or better parsing
                 if constraints.cooking_time_minutes:
-                    max_time = constraints.cooking_time_minutes.get("max")
-                    if max_time and "minutes" in recipe["content"]:
+                    max_time = constraints.cooking_time_minutes.max
+                    if max_time and "minutes" in recipe.get("content", ""):
                         # Basic time extraction - could be improved
                         try:
-                            time_str = recipe["content"].split("minutes")[
-                                0].split()[-1]
-                            if time_str.isdigit() and int(time_str) > max_time:
+                            time_st: str | None = (recipe.get("content", "").split("minutes")[0].split()[-1]
+                                                   if "minutes" in recipe.get("content", "") else None)
+                            if time_str and time_str.isdigit() and int(time_str) > max_time:
                                 continue
                         except:
                             pass
@@ -615,23 +625,24 @@ class MealPlannerWorkflow:
     async def generate_meal_plan(self, constraints: MealPlanConstraints) -> WeeklyMealPlan:
         """Generate a complete meal plan using recipe search and constraints."""
         # Get suitable recipes
-        recipes = self.find_suitable_recipes(constraints)
+        recipes = await self.find_suitable_recipes(constraints)
 
-        # Use these recipes as part of the input for the LLM-based meal planning
-        # This could feed into your existing do_search function or a new workflow
-
-        # Convert recipes to a format that works with your existing meal plan generation
         recipe_data = [
             {
-                "name": recipe["title"],
-                "url": recipe["url"],
-                "description": recipe["content"]
+                "name": recipe.get("title", ""),
+                "url": recipe.get("url", ""),
+                "description": recipe.get("content", "")
             }
             for recipe in recipes
         ]
 
-        # Add the recipes to your constraints or context for the LLM
-        constraints_dict = constraints.dict()
+        # Convert constraints to dict and ensure date serialization
+        constraints_dict = constraints.model_dump(
+            mode='json',  # This automatically converts dates to ISO format
+            exclude_none=True  # Optionally exclude None values
+        )
+
+        # Add the recipes to your constraints
         constraints_dict["available_recipes"] = recipe_data
 
         # Call your existing meal plan generation logic

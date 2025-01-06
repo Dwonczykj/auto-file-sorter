@@ -103,6 +103,7 @@ class DietaryRestrictions(BaseModel):
     eggs: micronutrients_enum
     meat: micronutrients_enum
     vegetarian: YesNoEnum
+    vegan: YesNoEnum
     pescetarian: YesNoEnum
     carnivore: YesNoEnum
 

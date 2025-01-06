@@ -23,7 +23,10 @@
             "medium",
             "large"
         ],
-        "default": "large",
+        "default": {
+            "max": "large",
+            "min": "medium"
+        },
         "lunch": {
             "max": "large",
             "min": "medium"
