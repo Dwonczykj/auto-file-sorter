@@ -174,3 +174,5 @@ youtube_token.json
 youtube_watch_later_reminders_example_schema.json
 client_secrets.json
 node_modules
+*.sqlite
+gitleaks-report.txt
