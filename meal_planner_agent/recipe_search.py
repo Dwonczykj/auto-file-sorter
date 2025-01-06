@@ -32,6 +32,11 @@ from tqdm import tqdm
 import sys
 import select
 import hashlib
+import faiss
+import numpy as np
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.vectorstores import FAISS
+from langchain.prompts import PromptTemplate
 
 
 # Constants
@@ -456,12 +461,13 @@ class RecipeSearch:
                 images TEXT,      -- JSON array
                 last_updated DATETIME,
                 is_recipe BOOLEAN,
-                -- Macros
                 macros TEXT,      -- JSON object
-                -- Micros
                 micros TEXT,      -- JSON object
-                -- Dietary Info
-                dietary_info TEXT -- JSON object
+                dietary_info TEXT, -- JSON object
+                is_modified BOOLEAN DEFAULT FALSE,
+                original_recipe_url TEXT,
+                user_approved BOOLEAN DEFAULT FALSE,
+                modification_notes TEXT
             )
         ''')
         self.persistent_conn.commit()
@@ -486,6 +492,197 @@ class RecipeSearch:
         self.llm_calls = 0
         # Maximum number of LLM calls per session
         self.max_llm_calls = Config.RECIPE_SEARCH_MAX_LLM_CALLS
+
+        # Initialize FAISS for recipe similarity search
+        self.embeddings = OpenAIEmbeddings()
+        self.faiss_store_path = Path('recipe_embeddings.faiss')
+        self.recipe_store = self._initialize_recipe_store()
+
+        # Recipe adaptation prompt
+        self.recipe_adaptation_prompt = PromptTemplate.from_template("""
+            Given the following recipe constraints:
+            {constraints}
+
+            And this recipe:
+            {recipe}
+
+            Please analyze if:
+            1. The recipe fully satisfies all constraints
+            2. If not, can it be modified to satisfy the constraints?
+            3. If it can be modified, please provide the modified recipe that satisfies all constraints.
+
+            Respond in this JSON format:
+            {
+                "satisfies_constraints": boolean,
+                "can_be_modified": boolean,
+                "modified_recipe": {recipe_object} or null,
+                "modifications_made": [list of changes] or null,
+                "reasoning": "explanation"
+            }
+            """)
+
+    def _initialize_recipe_store(self) -> FAISS:
+        """Initialize FAISS store with existing valid recipes."""
+        try:
+            # Try to load existing FAISS index
+            if self.faiss_store_path.exists():
+                logging.info("Loading existing FAISS index...")
+                return FAISS.load_local(str(self.faiss_store_path), self.embeddings)
+
+            # If no existing index, create new one from database
+            logging.info("Creating new FAISS index from database...")
+            self.persistent_cursor.execute('''
+                SELECT * FROM valid_recipes
+            ''')
+            recipes = self.persistent_cursor.fetchall()
+
+            if not recipes:
+                # Create empty store if no recipes exist
+                store = FAISS.from_texts(["placeholder"], self.embeddings)
+                store.save_local(str(self.faiss_store_path))
+                return store
+
+            # Convert recipes to texts for embedding
+            texts = [self._recipe_to_text(recipe) for recipe in recipes]
+            metadatas = [json.loads(recipe['content']) for recipe in recipes]
+
+            # Create and save the FAISS store
+            store = FAISS.from_texts(
+                texts, self.embeddings, metadatas=metadatas)
+            store.save_local(str(self.faiss_store_path))
+            return store
+
+        except Exception as e:
+            logging.error(f"Error initializing recipe store: {e}")
+            store = FAISS.from_texts(["placeholder"], self.embeddings)
+            store.save_local(str(self.faiss_store_path))
+            return store
+
+    def _recipe_to_text(self, recipe: Dict | ExtractRecipeDataSchemaProperties) -> str:
+        """Convert recipe to searchable text format."""
+        return f"""
+        Recipe: {recipe.get('title', '')}
+        Calories: {recipe.get('calories_per_serving', 0)}
+        Protein: {recipe.get('macros', {}).get('protein', 0)}g
+        Ingredients: {', '.join(recipe.get('ingredients', []))}
+        Dietary Info: {json.dumps(recipe.get('dietary_info', {}))}
+        Cooking Time: {recipe.get('cooking_time_minutes', 0)} minutes
+        """
+
+    async def _find_similar_recipes(self, constraints: Dict) -> List[Dict]:
+        """Find recipes similar to constraints using FAISS."""
+        query = self._constraints_to_query(constraints)
+        similar_docs = self.recipe_store.similarity_search(query, k=5)
+        return [doc.metadata for doc in similar_docs]
+
+    def _constraints_to_query(self, constraints: Dict) -> str:
+        """Convert constraints to search query text."""
+        return f"""
+        Recipe with:
+        Calories between {constraints.get('min_calories', 0)} and {constraints.get('max_calories', 1000)}
+        Cooking time under {constraints.get('max_cooking_time', 60)} minutes
+        Dietary restrictions: {', '.join(constraints.get('dietary_restrictions', []))}
+        Must include: {', '.join(constraints.get('must_include', []))}
+        Must avoid: {', '.join(constraints.get('must_avoid', []))}
+        """
+
+    async def _validate_and_adapt_recipe(self, recipe: Dict, constraints: Dict) -> Optional[Dict]:
+        """Validate recipe against constraints and adapt if possible."""
+        prompt = self.recipe_adaptation_prompt.format(
+            constraints=json.dumps(constraints, indent=2),
+            recipe=json.dumps(recipe, indent=2)
+        )
+
+        response = await self.llm.apredict(prompt)
+        result = json.loads(response)
+
+        if result['satisfies_constraints']:
+            return recipe
+        elif result['can_be_modified'] and result['modified_recipe']:
+            print("\nProposed recipe modifications:")
+            print("\n".join(result['modifications_made']))
+
+            if input("\nAccept modified recipe? (y/n): ").lower() == 'y':
+                modified_recipe = result['modified_recipe']
+                modified_recipe['is_modified'] = True
+                modified_recipe['original_recipe_url'] = recipe['url']
+                modified_recipe['user_approved'] = True
+                return modified_recipe
+
+        return None
+
+    async def search_recipes(
+        self,
+        min_calories: int = 200,
+        max_calories: int = 750,
+        constraints: Optional[Dict] = None
+    ) -> List[Dict]:
+        """Enhanced recipe search with similarity matching and adaptation."""
+        valid_recipes = []
+        constraints = constraints or {
+            'min_calories': min_calories,
+            'max_calories': max_calories
+        }
+
+        # First try finding similar recipes from existing database
+        similar_recipes = await self._find_similar_recipes(constraints)
+        for recipe in similar_recipes:
+            adapted_recipe = await self._validate_and_adapt_recipe(recipe, constraints)
+            if adapted_recipe:
+                valid_recipes.append(adapted_recipe)
+                if len(valid_recipes) >= Config.RECIPE_SEARCH_MAX_RESULTS:
+                    return valid_recipes
+
+        # If we need more recipes, search for new ones
+        if len(valid_recipes) < Config.RECIPE_SEARCH_MAX_RESULTS:
+            # Use existing search logic but skip already processed URLs
+            query = f"vegetarian recipe websites with recipes between {
+                min_calories} and {max_calories} calories"
+            initial_results = self.search_tool.invoke({"query": query})
+
+            for result in initial_results:
+                if isinstance(result, dict):
+                    url = result.get("url", "")
+
+                    # Skip if URL already processed
+                    if self._is_url_processed(url):
+                        continue
+
+                    # Process new URLs
+                    if self._is_recipe_listing_page(url):
+                        recipe_links = await self._extract_recipe_links(url)
+                        new_links = [
+                            link for link, probability in recipe_links if not self._is_url_processed(link)]
+
+                        for link in new_links:
+                            recipe = await self.process_url(link)
+                            if recipe:
+                                # Add new recipe to FAISS store
+                                self.recipe_store.add_texts(
+                                    [self._recipe_to_text(recipe)],
+                                    metadatas=[recipe]
+                                )
+
+                                # Try adapting the recipe
+                                adapted_recipe = await self._validate_and_adapt_recipe(recipe, constraints)
+                                if adapted_recipe:
+                                    valid_recipes.append(adapted_recipe)
+                                    if len(valid_recipes) >= Config.RECIPE_SEARCH_MAX_RESULTS:
+                                        return valid_recipes
+
+        return valid_recipes
+
+    def _is_url_processed(self, url: str) -> bool:
+        """Check if URL has already been processed."""
+        parsed = urlparse(url)
+        self.persistent_cursor.execute('''
+            SELECT processing_status
+            FROM url_path_analysis
+            WHERE domain = ? AND path = ?
+        ''', (parsed.netloc, parsed.path.strip('/')))
+
+        result = self.persistent_cursor.fetchone()
+        return bool(result and result[0] not in ['pending', None])
 
     def _is_recipe_listing_page(self, url: str) -> bool:
         """Check if URL is likely a recipe listing page rather than individual recipe."""
@@ -1443,13 +1640,15 @@ class RecipeSearch:
     def _save_valid_recipe(self, recipe: ExtractRecipeDataSchemaProperties):
         """Save or update valid recipe information."""
         try:
+            # Save to SQLite
             self.persistent_cursor.execute('''
                 INSERT OR REPLACE INTO valid_recipes
                 (url, recipe_name, title, calories, calories_per_serving,
                  cooking_time_minutes, servings, ingredients, instructions,
                  content, images, last_updated, is_recipe,
-                 macros, micros, dietary_info)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 macros, micros, dietary_info,
+                 is_modified, original_recipe_url, user_approved, modification_notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 recipe['url'],
                 recipe.get('recipe_name', ''),
@@ -1466,9 +1665,24 @@ class RecipeSearch:
                 recipe.get('is_recipe', False),
                 json.dumps(recipe.get('macros', {})),
                 json.dumps(recipe.get('micros', {})),
-                json.dumps(recipe.get('dietary_info', {}))
+                json.dumps(recipe.get('dietary_info', {})),
+                recipe.get('is_modified', False),
+                recipe.get('original_recipe_url', None),
+                recipe.get('user_approved', False),
+                recipe.get('modification_notes', None)
             ))
             self.persistent_conn.commit()
+
+            # Update FAISS index
+            recipe_text = self._recipe_to_text(recipe)
+            self.recipe_store.add_texts([recipe_text], metadatas=[recipe])
+            self.recipe_store.save_local(str(self.faiss_store_path))
+
+            # Verify index integrity
+            if not self.verify_faiss_index():
+                logging.warning("FAISS index out of sync, rebuilding...")
+                self.rebuild_faiss_index()
+
         except Exception as e:
             logging.error("Error saving recipe %s: %s", recipe['url'], e)
             exit(1)
@@ -1605,6 +1819,66 @@ class RecipeSearch:
         except Exception as e:
             logging.error(f"Error fetching URL {url}: {e}")
             return None
+
+    def rebuild_faiss_index(self) -> None:
+        """Rebuild FAISS index from scratch using the database."""
+        try:
+            logging.info("Rebuilding FAISS index from database...")
+
+            # Get all recipes from database
+            self.persistent_cursor.execute('''
+                SELECT * FROM valid_recipes
+            ''')
+            recipes = self.persistent_cursor.fetchall()
+
+            if not recipes:
+                logging.warning("No recipes found in database to build index")
+                store = FAISS.from_texts(["placeholder"], self.embeddings)
+                store.save_local(str(self.faiss_store_path))
+                self.recipe_store = store
+                return
+
+            # Convert recipes to texts and metadata
+            texts = [self._recipe_to_text(recipe) for recipe in recipes]
+            metadatas = [json.loads(recipe['content']) for recipe in recipes]
+
+            # Create new store
+            store = FAISS.from_texts(
+                texts, self.embeddings, metadatas=metadatas)
+
+            # Save and update
+            store.save_local(str(self.faiss_store_path))
+            self.recipe_store = store
+
+            logging.info(f"Successfully rebuilt index with {
+                         len(recipes)} recipes")
+
+        except Exception as e:
+            logging.error(f"Error rebuilding FAISS index: {e}")
+            raise
+
+    def verify_faiss_index(self) -> bool:
+        """Verify FAISS index matches database content."""
+        try:
+            # Get count of recipes in database
+            self.persistent_cursor.execute(
+                'SELECT COUNT(*) FROM valid_recipes')
+            db_count = self.persistent_cursor.fetchone()[0]
+
+            # Get count of recipes in FAISS (subtract 1 for placeholder if empty)
+            faiss_count = len(
+                self.recipe_store.index_to_docstore_id) - (1 if db_count == 0 else 0)
+
+            if db_count != faiss_count:
+                logging.warning(f"Index mismatch: Database has {
+                                db_count} recipes, FAISS has {faiss_count}")
+                return False
+
+            return True
+
+        except Exception as e:
+            logging.error(f"Error verifying FAISS index: {e}")
+            return False
 
 
 def get_input_with_timeout(prompt: str, timeout: int = 3) -> str:

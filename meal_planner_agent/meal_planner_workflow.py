@@ -12,7 +12,7 @@ from pydantic_ai.settings import ModelSettings, UsageLimits
 
 from langchain_openai import ChatOpenAI
 from auto_file_sorter.logging.logging_config import configure_logging
-from meal_planner_agent.meal_plan_constraints_td import DietaryRestrictions, MealPlanConstraints, MealSizeEnum
+from meal_planner_agent.meal_plan_constraints_pd import DietaryRestrictions, MealPlanConstraints, MealSizeEnum
 from meal_planner_agent.meal_plan_output_pd import DayMeals, WeeklyMealPlan, mock_example_meal_plan
 import streamlit as st
 from openai import AsyncOpenAI
