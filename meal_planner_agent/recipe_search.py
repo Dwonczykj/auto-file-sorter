@@ -37,6 +37,14 @@ import numpy as np
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
 from langchain.prompts import PromptTemplate
+from umap import UMAP
+import pacmap
+import matplotlib.pyplot as plt
+import seaborn as sns
+import plotly.express as px
+import plotly.graph_objects as go
+import io
+import base64
 
 
 # Constants
@@ -520,6 +528,14 @@ class RecipeSearch:
                 "reasoning": "explanation"
             }
             """)
+
+        # Initialize UMAP for visualization
+        self.umap_reducer = UMAP(n_components=2, random_state=42)
+        self.pacmap_reducer = pacmap.PaCMAP(
+            n_components=2, n_neighbors=None, MN_ratio=0.5, FP_ratio=2.0, random_state=1
+        )
+        self.embedded_recipes = None
+        self.recipe_names = None
 
     def _initialize_recipe_store(self) -> FAISS:
         """Initialize FAISS store with existing valid recipes."""
@@ -1879,6 +1895,150 @@ class RecipeSearch:
         except Exception as e:
             logging.error(f"Error verifying FAISS index: {e}")
             return False
+
+    def _get_recipe_embeddings(self) -> Tuple[np.ndarray, List[str]]:
+        """Get embeddings and recipe names from FAISS store."""
+        if not self.recipe_store or not self.recipe_store.index:
+            raise ValueError("No recipes in FAISS store")
+
+        # Get all embeddings from FAISS
+        embeddings = self.recipe_store.index.reconstruct_n(
+            0, self.recipe_store.index.ntotal)
+
+        # Get recipe names
+        recipe_names = [
+            self.recipe_store.docstore.search(idx).get('title', f'Recipe {i}')
+            for i, idx in enumerate(self.recipe_store.index_to_docstore_id.values())
+        ]
+
+        return embeddings, recipe_names
+
+    def _reduce_dimensions(self, query_embedding: Optional[np.ndarray] = None) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        """Reduce dimensions of embeddings using UMAP."""
+        embeddings, recipe_names = self._get_recipe_embeddings()
+
+        # Cache recipe names
+        self.recipe_names = recipe_names
+
+        # Fit UMAP on recipe embeddings
+        if self.embedded_recipes is None:
+            self.embedded_recipes = self.umap_reducer.fit_transform(embeddings)
+            # self.embedded_recipes = self.pacmap_reducer.fit_transform(np.array(embeddings), init="pca",)
+
+        # Transform query if provided
+        query_2d = None
+        if query_embedding is not None:
+            query_2d = self.umap_reducer.transform(
+                query_embedding.reshape(1, -1))
+
+        return self.embedded_recipes, query_2d
+
+    def visualize_store_interactive(self, query: Optional[str] = None) -> go.Figure:
+        """Create interactive Plotly visualization of recipe embeddings."""
+        # Get query embedding if provided
+        query_embedding = None
+        if query:
+            query_embedding = self.embeddings.embed_query(query)
+
+        # Reduce dimensions
+        recipe_embeddings_2d, query_2d = self._reduce_dimensions(
+            query_embedding)
+
+        # Create scatter plot
+        fig = go.Figure()
+
+        # Add recipe points
+        fig.add_trace(go.Scatter(
+            x=recipe_embeddings_2d[:, 0],
+            y=recipe_embeddings_2d[:, 1],
+            mode='markers+text',
+            marker=dict(color='blue', size=8),
+            text=self.recipe_names,
+            textposition="top center",
+            name='Recipes'
+        ))
+
+        # Add query point if provided
+        if query_2d is not None:
+            fig.add_trace(go.Scatter(
+                x=query_2d[:, 0],
+                y=query_2d[:, 1],
+                mode='markers',
+                marker=dict(color='red', size=12, symbol='star'),
+                name='Query'
+            ))
+
+        # Update layout
+        fig.update_layout(
+            title="Recipe Embedding Space",
+            xaxis_title="UMAP Dimension 1",
+            yaxis_title="UMAP Dimension 2",
+            showlegend=True
+        )
+
+        return fig
+
+    def save_visualization(self, query: Optional[str] = None, path: str = "recipe_viz.png") -> str:
+        """Save static visualization of recipe embeddings and return base64 encoded image."""
+        # Get query embedding if provided
+        query_embedding = None
+        if query:
+            query_embedding = self.embeddings.embed_query(query)
+
+        # Reduce dimensions
+        recipe_embeddings_2d, query_2d = self._reduce_dimensions(
+            query_embedding)
+
+        # Create plot
+        plt.figure(figsize=(12, 8))
+
+        # Plot recipes
+        plt.scatter(
+            recipe_embeddings_2d[:, 0],
+            recipe_embeddings_2d[:, 1],
+            c='blue',
+            alpha=0.5
+        )
+
+        # Add labels for some points
+        for i, (x, y) in enumerate(recipe_embeddings_2d):
+            if i % 3 == 0:  # Label every third point to avoid overcrowding
+                plt.annotate(
+                    self.recipe_names[i],
+                    (x, y),
+                    xytext=(5, 5),
+                    textcoords='offset points'
+                )
+
+        # Add query point if provided
+        if query_2d is not None:
+            plt.scatter(
+                query_2d[:, 0],
+                query_2d[:, 1],
+                c='red',
+                marker='*',
+                s=200,
+                label='Query'
+            )
+
+        plt.title("Recipe Embedding Space")
+        plt.xlabel("UMAP Dimension 1")
+        plt.ylabel("UMAP Dimension 2")
+
+        # Save to file if path provided
+        if path:
+            plt.savefig(path)
+
+        # Convert to base64 for web display
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png')
+        plt.close()
+
+        # Encode to base64
+        buf.seek(0)
+        img_str = base64.b64encode(buf.read()).decode()
+
+        return f"data:image/png;base64,{img_str}"
 
 
 def get_input_with_timeout(prompt: str, timeout: int = 3) -> str:

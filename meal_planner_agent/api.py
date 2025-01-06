@@ -1,9 +1,10 @@
-from fastapi import FastAPI, Query, HTTPException, Request
+from fastapi import FastAPI, Query, HTTPException, Request, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 import sqlite3
 from datetime import datetime
 import json
+from meal_planner_agent.recipe_search import RecipeSearch
 from pydantic import BaseModel
 from pathlib import Path
 from icecream import ic
@@ -24,6 +25,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+router = APIRouter()
 
 
 class RecipePage(BaseModel):
@@ -50,6 +53,11 @@ class URLPathAnalysis(BaseModel):
     probability: float
     path_type: str
     last_checked: datetime
+
+
+class RecipeVisualizationResponse(BaseModel):
+    interactive_plot: dict  # Plotly figure JSON
+    static_image: str      # Base64 encoded PNG
 
 
 def get_db():
@@ -283,6 +291,20 @@ async def log_requests(request: Request, call_next):
     except Exception as e:
         logger.error(f"Error processing request: {e}", exc_info=True)
         raise
+
+
+@router.get("/recipes/visualize", response_model=RecipeVisualizationResponse)
+async def visualize_recipes(query: Optional[str] = None):
+    recipe_search = RecipeSearch()
+
+    # Get both visualizations
+    interactive_fig = recipe_search.visualize_store_interactive(query)
+    static_image = recipe_search.save_visualization(query)
+
+    return RecipeVisualizationResponse(
+        interactive_plot=interactive_fig.to_dict(),
+        static_image=static_image
+    )
 
 
 if __name__ == "__main__":
