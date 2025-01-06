@@ -9,7 +9,7 @@ import re
 import asyncio
 from bs4 import BeautifulSoup
 import requests
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlunparse
 from functools import lru_cache
 import time
 import aiohttp
@@ -25,11 +25,33 @@ from datetime import datetime
 from pathlib import Path
 import threading
 from queue import Queue
+import webbrowser
+from urllib.parse import urlunparse
+from tqdm import tqdm
+import sys
+import select
+import hashlib
 
 
 # Constants
 PROBABILITY_OF_RECIPE_IN_URL = 0.7
 MAX_CHUNKS_TO_PROCESS = 5  # Limit chunks to process to control API usage
+
+
+class Config:
+    RECIPE_SEARCH_MODEL = "gpt-3.5-turbo"
+    RECIPE_SEARCH_MAX_RESULTS = 5
+    RECIPE_SEARCH_MAX_CHUNKS_TO_PROCESS = 5
+    RECIPE_SEARCH_MIN_REQUEST_INTERVAL = 1.0  # seconds between requests
+    RECIPE_SEARCH_PROBABILITY_OF_RECIPE_IN_URL = 0.7
+    RECIPE_SEARCH_MAX_CHUNKS_TO_PROCESS = 5
+    RECIPE_SEARCH_TOKEN_SPLITTER_OVERLAP = 100
+    RECIPE_SEARCH_TOKEN_SPLITTER_CHUNK_SIZE = 1000
+    RECIPE_SEARCH_TEXT_SPLITTER_OVERLAP = 200
+    RECIPE_SEARCH_TEXT_SPLITTER_CHUNK_SIZE = 2000
+    NESTED_LINKS_MAX_RECURSION_LEVEL = 2
+    MIN_PROBABILITY_OF_RECIPE_IN_URL_PATH = 0.49
+    RECIPE_SEARCH_MAX_LLM_CALLS = 100  # Maximum number of LLM calls per session
 
 
 class RecipeAnalysisResult(BaseModel):
@@ -87,36 +109,45 @@ class URLProcessingMonitor:
 
 
 class RecipeSearch:
-    def __init__(self, api_key: str | None = None, model: str = "gpt-3.5-turbo"):
-        """Initialize the recipe search tool with Tavily API key."""
+    def __init__(self, api_key: str | None = None, model: str = "gpt-3.5-turbo", auto_open_browser: bool = False):
+        """
+        Initialize the recipe search tool.
+
+        Args:
+            api_key: Optional Tavily API key
+            model: LLM model to use
+            auto_open_browser: Whether to automatically open URLs in browser for inspection
+        """
         logging.debug("Initializing RecipeSearch with model: %s", model)
         if api_key:
             os.environ["TAVILY_API_KEY"] = api_key
 
         self.search_tool = TavilySearchResults(
-            max_results=5,
+            max_results=Config.RECIPE_SEARCH_MAX_RESULTS,
             search_depth="advanced",
             include_answer=True,
             include_raw_content=True,
             include_images=True,
         )
-        logging.debug("Initialized Tavily search tool with max_results=5")
+        logging.debug("Initialized Tavily search tool with max_results=%s",
+                      Config.RECIPE_SEARCH_MAX_RESULTS)
 
         self.llm = ChatOpenAI(model=model, temperature=0)
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=2000,
-            chunk_overlap=200
+            chunk_size=Config.RECIPE_SEARCH_TEXT_SPLITTER_CHUNK_SIZE,
+            chunk_overlap=Config.RECIPE_SEARCH_TEXT_SPLITTER_OVERLAP
         )
 
         self._seen_urls: Set[str] = set()
         self._last_request_time = 0
-        self._min_request_interval = 1.0  # seconds between requests
+        # seconds between requests
+        self._min_request_interval = Config.RECIPE_SEARCH_MIN_REQUEST_INTERVAL
 
         # Initialize text splitter for recipe analysis
         self.token_splitter = TokenTextSplitter(
             model_name=model,
-            chunk_size=1000,
-            chunk_overlap=100
+            chunk_size=Config.RECIPE_SEARCH_TOKEN_SPLITTER_CHUNK_SIZE,
+            chunk_overlap=Config.RECIPE_SEARCH_TOKEN_SPLITTER_OVERLAP
         )
 
         # Setup prompt template for recipe analysis
@@ -129,14 +160,14 @@ class RecipeSearch:
                 - Serving size information
                 - Food-related images
                 - Recipe-specific terminology
-                
+
                 Use ONLY the provided content chunk and context to update your assessment.
                 """),
             ("human", """Previous summary: {previous_summary}
                 Current probability: {current_probability}
-                
+
                 New content to analyze: {content_chunk}
-                
+
                 Analyze this content and update the probability that this is a recipe page.
                 Consider both positive and negative indicators.
                 If there's clear evidence this is NOT a recipe (e.g., it's a blog post or review),
@@ -177,21 +208,21 @@ class RecipeSearch:
                 - Numbers that might indicate servings or cooking time
                 - Path structure typical of recipe websites
                 - Whether the path suggests a single recipe or a collection
-                
+
                 Respond with:
                 1. A probability between 0 and 1
                 2. The type of page (recipe_page or recipe_listing)
                 3. A brief explanation
                 """),
             ("human", """Analyze this URL path: {url_path}
-                
+
                 Determine if this is likely to be:
                 1. A single recipe page
                 2. A recipe listing/collection page
                 3. Neither (non-recipe content)
-                
+
                 Consider these patterns:
-                
+
                 Single Recipe URLs (recipe_page):
                 - Contains specific dish names
                 - Has ingredient names in path
@@ -201,7 +232,7 @@ class RecipeSearch:
                 - recipes/chicken-parmesan
                 - recipe/quick-vegetarian-curry
                 - cooking/desserts/chocolate-cake
-                
+
                 Recipe Listing URLs (recipe_listing):
                 - Contains collection terms (category, index, all)
                 - Uses broader food categories
@@ -211,20 +242,90 @@ class RecipeSearch:
                 - recipes/vegetarian
                 - category/dinner
                 - collections/quick-meals
-                
+
                 Non-Recipe URLs:
                 - blog/cooking-tips
                 - articles/best-kitchen-tools
                 - about/our-chefs
-                
+
+                For example:
+                Example 1:
+                url_path: recipes/chicken-meatballs-quinoa-curried-cauliflower
+                {{
+                    "probability": 0.8,
+                    "path_type": "recipe_page",
+                    "reasoning": "The URL path suggests a single recipe page because it contains a specific dish name and is subpath of recipes/."
+                }}
+                Example 2:
+                url_path: recipes/collection/700-calorie-meal-recipes#main-navigation-popup
+                {{
+                    "probability": 0.8,
+                    "path_type": "recipe_listing",
+                    "reasoning": "The URL path suggests a recipe listing page because it contains the word 'recipes' in the final segment of the url path and '700 calorie meal recipes'. The index string after the # is ignored."
+                }}
+
+                Pay close attention to the case of the words in the final segment of the url path.
+
                 Respond in this format:
-                {
+                {{
                     "probability": <float between 0 and 1>,
                     "path_type": "recipe_page" or "recipe_listing" or "non_recipe",
                     "reasoning": "<brief explanation of classification>"
-                }
+                }}
                 """)
         ])
+
+        # Browser settings
+        self.auto_open_browser = auto_open_browser
+        self.browser = webbrowser.get()  # Get default browser
+        logging.debug("Initialized browser: %s", self.browser.name)
+
+        # Initialize persistent SQLite database
+        self.db_path = Path('recipe_database.sqlite')
+        self.persistent_conn = sqlite3.connect(str(self.db_path))
+        self.persistent_cursor = self.persistent_conn.cursor()
+
+        # Create tables if they don't exist
+        self.persistent_cursor.execute('''
+            CREATE TABLE IF NOT EXISTS recipe_pages (
+                url TEXT PRIMARY KEY,
+                probability REAL,
+                path_type TEXT,
+                last_checked DATETIME,
+                content_hash TEXT
+            )
+        ''')
+
+        self.persistent_cursor.execute('''
+            CREATE TABLE IF NOT EXISTS valid_recipes (
+                url TEXT PRIMARY KEY,
+                title TEXT,
+                calories INTEGER,
+                cooking_time INTEGER,
+                ingredients TEXT,
+                content TEXT,
+                last_updated DATETIME
+            )
+        ''')
+        self.persistent_conn.commit()
+
+        # Add table for URL path analysis caching
+        self.persistent_cursor.execute('''
+            CREATE TABLE IF NOT EXISTS url_path_analysis (
+                domain TEXT,
+                path TEXT,
+                probability REAL,
+                path_type TEXT,
+                last_checked DATETIME,
+                PRIMARY KEY (domain, path)
+            )
+        ''')
+        self.persistent_conn.commit()
+
+        # Add LLM call tracking
+        self.llm_calls = 0
+        # Maximum number of LLM calls per session
+        self.max_llm_calls = Config.RECIPE_SEARCH_MAX_LLM_CALLS
 
     def _is_recipe_listing_page(self, url: str) -> bool:
         """Check if URL is likely a recipe listing page rather than individual recipe."""
@@ -260,8 +361,9 @@ class RecipeSearch:
         """Log URL processing details to SQLite and monitor."""
         try:
             self.cursor.execute('''
-                INSERT OR REPLACE INTO url_processing_log 
-                (url, probability, used_llm, timestamp, processing_time, content_length, error_message)
+                INSERT OR REPLACE INTO url_processing_log
+                (url, probability, used_llm, timestamp,
+                 processing_time, content_length, error_message)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (
                 url,
@@ -320,7 +422,9 @@ class RecipeSearch:
                 soup = BeautifulSoup(content, 'html.parser')
 
                 if self._check_for_ingredients(soup):
-                    probability *= self._analyze_content_indicators(soup)
+                    prob_loss = 1.0 / (1.0 - probability)
+                    prob_loss += self._analyze_content_indicators(soup)
+                    probability = 1.0 - (1.0 / prob_loss)
 
                     if use_llm and probability > 0:
                         probability = await self._deep_content_analysis(content, probability)
@@ -410,7 +514,8 @@ class RecipeSearch:
 
     def _analyze_content_indicators(self, soup: BeautifulSoup) -> float:
         """Analyze content for recipe indicators."""
-        score = 1.0
+        init_score = 10.0
+        score = 10.0
 
         # Check for recipe schema (strong indicator)
         if self._check_recipe_schema(soup):
@@ -458,7 +563,7 @@ class RecipeSearch:
         if any(re.search(pattern, str(soup), re.I) for pattern in metadata_patterns):
             score *= 1.1
 
-        return min(score, 1.0)
+        return max(score, 0.0) - init_score
 
     def _check_recipe_schema(self, soup: BeautifulSoup) -> bool:
         """Check for recipe schema markup."""
@@ -545,10 +650,15 @@ class RecipeSearch:
             where path_type is one of: 'recipe_page', 'recipe_listing', 'non_recipe'
         """
         try:
+            # Check cache first
+            cached_result = self._get_cached_path_analysis(url)
+            if cached_result:
+                return cached_result
+
+            # Proceed with LLM analysis
             url_path = self._extract_url_path(url)
             logging.debug("Analyzing URL path: %s", url_path)
 
-            # Skip empty paths
             if not url_path:
                 return 0.0, "non_recipe", "Empty URL path"
 
@@ -558,41 +668,25 @@ class RecipeSearch:
                 'privacy', 'terms', 'search', 'tag'
             ]
             if any(indicator in url_path.lower() for indicator in non_recipe_indicators):
+                self._save_path_analysis(url, 0.0, "non_recipe")
                 return 0.0, "non_recipe", "Path contains non-recipe indicators"
 
-            # Update the prompt to distinguish between recipe types
+            # Check LLM call limit
+            if self.llm_calls >= self.max_llm_calls:
+                logging.warning(
+                    "Reached maximum LLM calls limit (%d)", self.max_llm_calls)
+                return 0.0, "non_recipe", "LLM call limit reached"
+
+            # Increment LLM call counter
+            self.llm_calls += 1
+
             result = await self.llm.apredict_messages([
                 *self.url_analysis_prompt.format_messages(
-                    url_path=url_path,
-                    context="""
-                    Analyze if this URL path likely leads to:
-                    1. A single recipe page (e.g., 'recipes/chicken-parmesan', 'recipe/vegetarian-curry')
-                    2. A recipe listing/collection page (e.g., 'recipes/all', 'category/dinner', 'collections/vegetarian')
-                    
-                    Common patterns:
-                    Single Recipe URLs:
-                    - Contain specific dish names
-                    - Include ingredient names
-                    - Have detailed descriptors (quick, easy, homemade)
-                    - Often longer, more specific paths
-                    
-                    Recipe Listing URLs:
-                    - Contains words like: category, collection, all, index
-                    - More general terms (dinner, vegetarian, quick)
-                    - Usually shorter paths
-                    - Often include sorting/filtering terms
-                    
-                    Respond in this format:
-                    {
-                        "probability": <float between 0 and 1>,
-                        "path_type": "recipe_page" or "recipe_listing",
-                        "reasoning": "<brief explanation>"
-                    }
-                    """
+                    url_path=url_path
                 )
             ])
 
-            # Parse the response
+            # Parse and save the response
             try:
                 response = json.loads(result.content)
                 probability = float(response.get('probability', 0))
@@ -600,20 +694,8 @@ class RecipeSearch:
                 reasoning = response.get(
                     'reasoning', 'No explanation provided')
 
-                # Adjust probability based on additional heuristics
-                if path_type == "recipe_page":
-                    if 'recipe' in url_path.lower():
-                        probability = min(1.0, probability * 1.2)
-                    if any(term in url_path.lower() for term in ['how-to', 'guide', 'tips']):
-                        probability *= 0.7
-                elif path_type == "recipe_listing":
-                    if any(term in url_path.lower() for term in ['category', 'collection', 'index']):
-                        probability = min(1.0, probability * 1.2)
-
-                logging.debug(
-                    "URL path analysis for %s: prob=%.2f, type=%s, reason=%s",
-                    url_path, probability, path_type, reasoning
-                )
+                # Save analysis to cache
+                self._save_path_analysis(url, probability, path_type)
 
                 return probability, path_type, reasoning
 
@@ -626,18 +708,49 @@ class RecipeSearch:
             return 0.0, "non_recipe", f"Error: {e}"
 
     @lru_cache(maxsize=100)
-    async def _extract_recipe_links(self, url: str) -> List[str]:
-        """Extract individual recipe links from a recipe listing page with caching."""
-        logging.debug("Extracting recipe links from: %s", url)
+    async def _extract_recipe_links(self, url: str, recursion_level: int = 0) -> List[tuple[str, float]]:
+        """
+        Extract individual recipe links from a recipe listing page with caching.
+
+        Args:
+            url: URL to process
+            recursion_level: Current depth of recursion
+
+        Returns:
+            List of tuples containing (url, probability)
+        """
+        if recursion_level >= Config.NESTED_LINKS_MAX_RECURSION_LEVEL:
+            logging.debug(
+                "Reached maximum recursion level (%d) for %s",
+                Config.NESTED_LINKS_MAX_RECURSION_LEVEL, url
+            )
+            return []
+
+        logging.debug("Extracting recipe links from: %s (level %d)",
+                      url, recursion_level)
         try:
             content = await self._rate_limited_request(url)
             soup = BeautifulSoup(content, 'html.parser')
 
-            links = soup.find_all('a', href=True)
-            recipe_links = []
+            # filter only the links that have the same domain.
+            _links = soup.find_all('a', href=True)
+            base_domain = urlparse(url).netloc
+            base_url = self.ensure_url_scheme(base_domain)
 
-            for link in links:
-                href = urljoin(url, link['href'])
+            # Process links, ensuring proper URL format
+            _hrefs = []
+            for link in _links:
+                href = link['href']
+                full_url = urljoin(base_url, href)
+                parsed_url = urlparse(full_url)
+                if parsed_url.netloc == base_domain or parsed_url.netloc == base_url:
+                    _hrefs.append(full_url)
+
+            hrefs = list(set(_hrefs))  # Remove duplicates
+            # List of (url, probability) tuples
+            recipe_links_with_prob: list[tuple[str, float]] = []
+
+            for href in hrefs:
                 if href in self._seen_urls:
                     logging.debug("Skipping already seen URL: %s", href)
                     continue
@@ -653,32 +766,44 @@ class RecipeSearch:
                         href, path_probability, reasoning
                     )
 
+                    # If auto_open_browser is enabled, open the URL for inspection
+                    if self.auto_open_browser:
+                        await self.open_in_browser(href)
+
                     # If URL path looks promising, do full content analysis
                     probability = await self._calculate_recipe_probability(href)
                     logging.debug(
                         "Full content analysis for %s: %.2f", href, probability)
 
                     if probability >= PROBABILITY_OF_RECIPE_IN_URL:
-                        recipe_links.append(href)
+                        recipe_links_with_prob.append((href, path_probability))
                         logging.debug(
                             "Added recipe link: %s (path_prob=%.2f, content_prob=%.2f, type=%s)",
                             href, path_probability, probability, path_type
+                        )
+                    else:
+                        logging.debug(
+                            "Skipping URL based on path analysis probability <= %s (%s): %.2f - %s - %s",
+                            PROBABILITY_OF_RECIPE_IN_URL, href, path_probability, path_type, reasoning
                         )
                 elif path_type == "recipe_listing":
                     logging.debug(
                         "Found nested recipe listing (%s): %.2f - %s",
                         href, path_probability, reasoning
                     )
-                    # Optionally process nested recipe listings
-                    nested_links = await self._extract_recipe_links(href)
-                    recipe_links.extend(nested_links)
+                    # Process nested recipe listings with incremented recursion level
+                    nested_links = await self._extract_recipe_links(href, recursion_level + 1)
+                    recipe_links_with_prob.extend(nested_links)
                 else:
                     logging.debug(
                         "Skipping URL based on path analysis (%s): %.2f - %s - %s",
                         href, path_probability, path_type, reasoning
                     )
 
-            return list(set(recipe_links))
+            # Sort by probability and return top results
+            sorted_links = sorted(recipe_links_with_prob,
+                                  key=lambda x: x[1], reverse=True)
+            return sorted_links
 
         except Exception as e:
             logging.error("Error extracting links from %s: %s", url, e)
@@ -809,18 +934,30 @@ class RecipeSearch:
                           i, i + len(batch))
 
             batch_results = await self._process_url_batch(batch, min_calories, max_calories)
+
+            # Save both recipe pages and valid recipes to database
+            for recipe in batch_results:
+                self._save_valid_recipe(recipe)
+                self._save_recipe_page(
+                    recipe['url'],
+                    recipe.get('probability', 0),
+                    'recipe_page'
+                )
+
             valid_recipes.extend(batch_results)
 
-            if len(valid_recipes) >= 5:
+            if len(valid_recipes) >= Config.RECIPE_SEARCH_MAX_RESULTS:
                 logging.debug(
-                    "Reached target of 5 valid recipes, stopping search")
+                    "Reached target of %d valid recipes, stopping search",
+                    Config.RECIPE_SEARCH_MAX_RESULTS
+                )
                 break
 
             await asyncio.sleep(0.5)  # Small delay between batches
 
-        logging.debug("Search complete. Returning %d recipes",
-                      len(valid_recipes[:5]))
-        return valid_recipes[:5]
+        logging.debug("Search complete. Found %d valid recipes",
+                      len(valid_recipes))
+        return valid_recipes[:Config.RECIPE_SEARCH_MAX_RESULTS]
 
     def _recipes_are_similar(self, recipe1: Dict, recipe2: Dict, threshold: float = 0.7) -> bool:
         """Check if two recipes are similar based on ingredients and instructions."""
@@ -925,6 +1062,7 @@ class RecipeSearch:
         try:
             self.monitor.stop()
             self.conn.close()
+            self.persistent_conn.close()
         except:
             pass
 
@@ -982,7 +1120,7 @@ class RecipeSearch:
         """
         try:
             self.cursor.execute('''
-                SELECT 
+                SELECT
                     url,
                     probability,
                     used_llm,
@@ -1099,6 +1237,156 @@ class RecipeSearch:
         except Exception as e:
             print(f"Error analyzing failures: {e}")
 
+    async def open_in_browser(self, url: str, delay: float = 2.0) -> None:
+        """
+        Open a URL in the default browser with optional delay.
+
+        Args:
+            url: URL to open
+            delay: Delay in seconds before opening (to avoid overwhelming the browser)
+        """
+        try:
+            logging.debug("Opening URL in browser: %s", url)
+            self.browser.open(url, new=2)  # new=2 means open in new tab
+            if delay > 0:
+                await asyncio.sleep(delay)
+        except Exception as e:
+            logging.error("Failed to open URL in browser: %s", e)
+
+    def ensure_url_scheme(self, url: str, default_scheme: str = 'https') -> str:
+        """Ensure URL has a scheme (http/https), adding default if missing."""
+        parsed = urlparse(url)
+        if not parsed.scheme:
+            # Reconstruct URL with scheme
+            parsed = parsed._replace(scheme=default_scheme)
+            if not parsed.netloc and parsed.path:
+                # If there's no netloc but there is a path, the domain is probably in the path
+                parts = parsed.path.split('/', 1)
+                parsed = parsed._replace(
+                    netloc=parts[0], path=parts[1] if len(parts) > 1 else '')
+        return urlunparse(parsed)
+
+    def _save_recipe_page(self, url: str, probability: float, path_type: str):
+        """Save or update recipe page information."""
+        try:
+            content = requests.get(url).text
+            content_hash = hashlib.md5(content.encode()).hexdigest()
+
+            self.persistent_cursor.execute('''
+                INSERT OR REPLACE INTO recipe_pages
+                (url, probability, path_type, last_checked, content_hash)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (url, probability, path_type, datetime.now().isoformat(), content_hash))
+            self.persistent_conn.commit()
+        except Exception as e:
+            logging.error("Error saving recipe page %s: %s", url, e)
+
+    def _save_valid_recipe(self, recipe: dict):
+        """Save or update valid recipe information."""
+        try:
+            self.persistent_cursor.execute('''
+                INSERT OR REPLACE INTO valid_recipes
+                (url, title, calories, cooking_time,
+                 ingredients, content, last_updated)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                recipe['url'],
+                recipe.get('title', ''),
+                recipe.get('calories', 0),
+                recipe.get('cooking_time', 0),
+                json.dumps(recipe.get('ingredients', [])),
+                recipe.get('content', ''),
+                datetime.now().isoformat()
+            ))
+            self.persistent_conn.commit()
+        except Exception as e:
+            logging.error("Error saving recipe %s: %s", recipe['url'], e)
+
+    def _get_cached_path_analysis(self, url: str) -> Optional[Tuple[float, str, str]]:
+        """Get cached path analysis if it exists for this URL or its parent paths."""
+        try:
+            parsed = urlparse(url)
+            domain = parsed.netloc
+            path = parsed.path.strip('/')
+            path_parts = path.split('/')
+
+            # Check all parent paths from most specific to least specific
+            for i in range(len(path_parts), 0, -1):
+                parent_path = '/'.join(path_parts[:i])
+
+                self.persistent_cursor.execute('''
+                    SELECT probability, path_type, last_checked
+                    FROM url_path_analysis
+                    WHERE domain = ? AND path = ?
+                ''', (domain, parent_path))
+
+                result = self.persistent_cursor.fetchone()
+                if result:
+                    probability, path_type, last_checked = result
+                    # If parent path is non_recipe with low probability, skip all child paths
+                    if (path_type == 'non_recipe' and
+                            probability < Config.MIN_PROBABILITY_OF_RECIPE_IN_URL_PATH):
+                        logging.debug(
+                            "Skipping URL due to low-probability parent path %s: %.2f",
+                            parent_path, probability
+                        )
+                        return probability, path_type, "Parent path indicates non-recipe content"
+
+                    # If this is the exact path (not a parent), return the cached result
+                    if parent_path == path:
+                        return probability, path_type, "Using cached analysis"
+
+            return None
+        except Exception as e:
+            logging.error("Error checking cached path analysis: %s", e)
+            return None
+
+    def _save_path_analysis(self, url: str, probability: float, path_type: str):
+        """Save path analysis results to cache."""
+        try:
+            parsed = urlparse(url)
+            self.persistent_cursor.execute('''
+                INSERT OR REPLACE INTO url_path_analysis
+                (domain, path, probability, path_type, last_checked)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (
+                parsed.netloc,
+                parsed.path.strip('/'),
+                probability,
+                path_type,
+                datetime.now().isoformat()
+            ))
+            self.persistent_conn.commit()
+        except Exception as e:
+            logging.error("Error saving path analysis: %s", e)
+
+
+def get_input_with_timeout(prompt: str, timeout: int = 3) -> str:
+    """Get user input with a timeout and progress bar."""
+    print(prompt, end='', flush=True)
+
+    # Setup progress bar
+    with tqdm(total=timeout, bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}s') as pbar:
+        start_time = time.time()
+        input_ready = False
+        response = ''
+
+        while time.time() - start_time < timeout:
+            # Check if there's input ready
+            if select.select([sys.stdin], [], [], 0)[0]:
+                response = sys.stdin.readline().strip()
+                input_ready = True
+                break
+
+            # Update progress bar
+            elapsed = time.time() - start_time
+            pbar.n = min(timeout, int(elapsed))
+            pbar.refresh()
+            time.sleep(0.1)
+
+    print()  # New line after progress bar
+    return response if input_ready else 'n'  # Default to 'n' if no input
+
 
 async def test_recipe_search():
     """Test the RecipeSearch class with constraints from JSON files."""
@@ -1117,6 +1405,33 @@ async def test_recipe_search():
         print("\n" + "="*60)
         print("RECIPE SEARCH TEST".center(60))
         print("="*60 + "\n")
+
+        # Ask user about browser inspection with timeout
+        inspect_in_browser = get_input_with_timeout(
+            "\nWould you like to inspect URLs in browser? (y/n): ") == 'y'
+
+        if inspect_in_browser:
+            print("URLs will open in your default browser for inspection.")
+            try:
+                delay = float(get_input_with_timeout(
+                    "Enter delay between URLs (seconds, default 2.0): ") or "2.0")
+            except ValueError:
+                delay = 2.0
+                print("Invalid input, using default delay of 2.0 seconds")
+        else:
+            delay = 0
+
+        # Initialize recipe searcher with browser settings
+        print("\nInitializing recipe search...")
+        recipe_searcher = RecipeSearch(
+            auto_open_browser=inspect_in_browser,
+            model=Config.RECIPE_SEARCH_MODEL
+        )
+
+        # Update the open_in_browser method's delay if specified
+        if inspect_in_browser:
+            recipe_searcher.open_in_browser = lambda url: recipe_searcher.open_in_browser(
+                url, delay=delay)
 
         # Load all constraint files
         print("Loading constraint files...")
@@ -1147,10 +1462,6 @@ async def test_recipe_search():
         print("\nAvoiding Ingredients:")
         for ingredient in ingredients_to_avoid:
             print(f"- {ingredient}")
-
-        # Initialize recipe searcher
-        print("\nInitializing recipe search...")
-        recipe_searcher = RecipeSearch()
 
         # Search for recipes
         print("\nSearching for recipes...")
@@ -1199,9 +1510,9 @@ async def test_recipe_search():
                     print(
                         f"Recipes {i+1} and {j+1} are: {'Similar' if similarity else 'Different'}")
 
-        # After recipe search is complete, print URL processing statistics
-        print("\nURL Processing Statistics:")
-        print("-"*30)
+                    # After recipe search is complete, print URL processing statistics
+                    print("\nURL Processing Statistics:")
+                    print("-"*30)
 
         history = recipe_searcher.get_url_processing_history()
 
@@ -1216,7 +1527,7 @@ async def test_recipe_search():
         print(f"Total URLs processed: {total_urls}")
         print(f"URLs using LLM analysis: {llm_used}")
         print(f"High probability recipes (≥{
-              PROBABILITY_OF_RECIPE_IN_URL}): {high_prob}")
+            PROBABILITY_OF_RECIPE_IN_URL}): {high_prob}")
         print(f"Average processing time: {avg_time:.2f}s")
 
         # Print detailed log for high probability URLs
@@ -1230,19 +1541,19 @@ async def test_recipe_search():
                 if entry['error_message']:
                     print(f"Error: {entry['error_message']}")
 
-        print("\nMonitoring URL processing in real-time...")
-        print("Check url_processing_live.jsonl for detailed logs")
-        print("-"*60)
+                    print("\nMonitoring URL processing in real-time...")
+                    print("Check url_processing_live.jsonl for detailed logs")
+                    print("-"*60)
 
-        print("\nViewing URL Processing Log:")
-        # Show URLs with prob >= 0.3
-        recipe_searcher.view_url_log(min_probability=0.3)
+                    print("\nViewing URL Processing Log:")
+                    # Show URLs with prob >= 0.3
+                    recipe_searcher.view_url_log(min_probability=0.3)
 
-        print("\nAnalyzing Failed URLs:")
-        recipe_searcher.analyze_failures()
+                    print("\nAnalyzing Failed URLs:")
+                    recipe_searcher.analyze_failures()
 
-        print("\nTest Complete!")
-        print("="*60 + "\n")
+                    print("\nTest Complete!")
+                    print("="*60 + "\n")
 
     except Exception as e:
         print("\n❌ Error during testing:")
