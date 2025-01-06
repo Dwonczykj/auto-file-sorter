@@ -1,0 +1,336 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Meal Planner API",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/meal_planner_agent/api.py",
+            "envFile": "${workspaceFolder}/.env",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/:${workspaceFolder}/auto_file_sorter/:${workspaceFolder}/auto_file_sorter/models/:${workspaceFolder}/auto_file_sorter/logging/:${workspaceFolder}/meal_planner_agent/:${workspaceFolder}/mem0_ai_assistant/:${workspaceFolder}/memrag/:",
+                "TESTING": "false",
+                "DEBUG": "true"
+            },
+            "console": "integratedTerminal"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Debug Meal Planner Frontend - `npm run dev`",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": [
+                "run-script",
+                "dev"
+            ],
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "cwd": "${workspaceFolder}/frontend",
+            "console": "integratedTerminal"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Debug Next.js",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": [
+                "run",
+                "dev"
+            ],
+            "cwd": "${workspaceFolder}/frontend",
+            "env": {
+                "NODE_OPTIONS": "--inspect"
+            },
+            "console": "integratedTerminal",
+            "restart": true,
+            "protocol": "inspector",
+            "port": 9229,
+            "autoAttachChildProcesses": true,
+            "preLaunchTask": "nvm use"
+        },
+        {
+            "name": "Python: Launch App NGrok (FastAPI)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/auto_file_sorter/api/main.py",
+            // "module": "uvicorn",
+            // "args": [
+            //     "auto_file_sorter.api.main:app",
+            //     "--host",
+            //     "0.0.0.0",
+            //     "--port",
+            //     "8000",
+            //     "--reload",
+            //     "--log-level",
+            //     "debug"
+            // ],
+            "console": "integratedTerminal",
+            "envFile": "${workspaceFolder}/.env",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/:${workspaceFolder}/auto_file_sorter/:${workspaceFolder}/auto_file_sorter/models/:${workspaceFolder}/auto_file_sorter/logging/:${workspaceFolder}/meal_planner_agent/:${workspaceFolder}/mem0_ai_assistant/:${workspaceFolder}/memrag/:",
+                "TESTING": "false",
+                "FIREBASE_ENVIRONMENT": "development",
+                "DEBUG": "true",
+                "VIRTUAL_ENV": "${workspaceFolder}/auto_file_sorter_venv"
+            },
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true,
+            // "preLaunchTask": "Start ngrok with venv"
+        },
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "envFile": "${workspaceFolder}/.env",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/:${workspaceFolder}/auto_file_sorter/:${workspaceFolder}/auto_file_sorter/models/:${workspaceFolder}/auto_file_sorter/logging/:${workspaceFolder}/meal_planner_agent/:${workspaceFolder}/mem0_ai_assistant/:${workspaceFolder}/memrag/:",
+                "TESTING": "false",
+                "DEBUG": "true"
+            },
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Python: Pytest [Current]",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "${file}",
+                "-x", // Add this line to exit on first failure
+                // "-v",
+                // "-k EXPRESSION"
+                "--tb=short",
+                "--maxfail=1",
+                "--disable-warnings",
+                "--disable-pytest-warnings",
+                "--verbosity=0",
+                "--last-failed",
+            ],
+            // "preLaunchTask": "clear-terminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/:${workspaceFolder}/auto_file_sorter/:${workspaceFolder}/auto_file_sorter/models/:${workspaceFolder}/auto_file_sorter/logging/:${workspaceFolder}/meal_planner_agent/:",
+                "FIREBASE_ENVIRONMENT": "test",
+                "TESTING": "true"
+            },
+            "console": "integratedTerminal",
+            "presentation": {
+                "clear": true,
+                "group": "test",
+                "reveal": "always",
+                "focus": true
+            }
+        },
+        {
+            "name": "Python: Pytest [test_ai_service.py]",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "tests/test_ai_service.py",
+                "-x", // Add this line to exit on first failure
+                // "-v",
+                // "-k EXPRESSION"
+                "--tb=short",
+                "--maxfail=1",
+                "--disable-warnings",
+                "--disable-pytest-warnings",
+                "--verbosity=0",
+                "--last-failed",
+            ],
+            // "preLaunchTask": "clear-terminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/:${workspaceFolder}/auto_file_sorter/:${workspaceFolder}/auto_file_sorter/models/:${workspaceFolder}/auto_file_sorter/logging/:${workspaceFolder}/meal_planner_agent/:",
+                "FIREBASE_ENVIRONMENT": "test",
+                "TESTING": "true"
+            },
+            "console": "integratedTerminal",
+            "presentation": {
+                "clear": true,
+                "group": "test",
+                "reveal": "always",
+                "focus": true
+            }
+        },
+        {
+            "name": "Python: Pytest (Skip Expensive Tests) [Current]",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "${file}",
+                "-m",
+                "-x", // Add this line to exit on first failure
+                // "-v",
+                // "-k EXPRESSION"
+                "--tb=short",
+                "--maxfail=1",
+                "--disable-warnings",
+                "--disable-pytest-warnings",
+                "--verbosity=0",
+                "--last-failed",
+            ],
+            // "preLaunchTask": "clear-terminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/:${workspaceFolder}/auto_file_sorter/:${workspaceFolder}/auto_file_sorter/models/:${workspaceFolder}/auto_file_sorter/logging/:${workspaceFolder}/meal_planner_agent/:",
+                "FIREBASE_ENVIRONMENT": "test",
+                "TESTING": "true"
+            },
+            "console": "integratedTerminal",
+            "presentation": {
+                "clear": true,
+                "group": "test",
+                "reveal": "always",
+                "focus": true
+            }
+        },
+        {
+            "name": "Python: Pytest [test_firebase_methods.py]",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "tests/test_firebase_methods.py",
+                "-x", // Add this line to exit on first failure
+                // "-v",
+            ],
+            // "preLaunchTask": "clear-terminal",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/:${workspaceFolder}/auto_file_sorter/:${workspaceFolder}/auto_file_sorter/models/:${workspaceFolder}/auto_file_sorter/logging/:${workspaceFolder}/meal_planner_agent/:",
+                "FIREBASE_ENVIRONMENT": "test",
+                "TESTING": "true"
+            },
+            "console": "integratedTerminal",
+            "consoleName": "Python Debug Console",
+            "presentation": {
+                "clear": true,
+                "group": "test",
+                "reveal": "always",
+                "focus": true
+            },
+        },
+        {
+            "name": "Python: Pytest [Current] --reverse",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "${file}",
+                "-x", // Add this line to exit on first failure
+                "-v",
+                "--reverse"
+            ],
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/:${workspaceFolder}/auto_file_sorter/:${workspaceFolder}/auto_file_sorter/models/:${workspaceFolder}/auto_file_sorter/logging/:",
+                "FIREBASE_ENVIRONMENT": "test",
+                "TESTING": "true"
+            },
+            "console": "integratedTerminal",
+            "presentation": {
+                "clear": true,
+                "group": "test",
+                "reveal": "always",
+                "focus": true
+            }
+        },
+        {
+            "name": "Python: Pytest -vv [Current]",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "${file}",
+                "-x", // Add this line to exit on first failure
+                "-vv",
+                "--tb=long",
+            ],
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/:${workspaceFolder}/auto_file_sorter/:${workspaceFolder}/auto_file_sorter/models/:${workspaceFolder}/auto_file_sorter/logging/:",
+                "FIREBASE_ENVIRONMENT": "test",
+                "TESTING": "true"
+            },
+            "console": "integratedTerminal",
+            "presentation": {
+                "clear": true,
+                "group": "test",
+                "reveal": "always",
+                "focus": true
+            }
+        },
+        {
+            "name": "Python: Unittest [Discover]",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "unittest",
+            "args": [
+                "discover",
+                "-s",
+                "testing",
+                "-p",
+                "*.py"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "presentation": {
+                "clear": true,
+                "group": "test",
+                "reveal": "always",
+                "focus": true
+            }
+        },
+        {
+            "name": "Python: Flask",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "flask",
+            "env": {
+                "FLASK_APP": "app.py",
+                "FLASK_ENV": "development",
+                "FLASK_DEBUG": "1",
+                "FIREBASE_ENVIRONMENT": "test",
+                "TESTING": "true"
+            },
+            "args": [
+                "run",
+                "--no-debugger",
+                "--no-reload"
+            ],
+            "jinja": true,
+            "console": "integratedTerminal",
+            "presentation": {
+                "clear": true,
+                "group": "test",
+                "reveal": "always",
+                "focus": true
+            }
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Backend + Frontend",
+            "configurations": [
+                "Debug Meal Planner Frontend - `npm run dev`",
+                "Python Debugger: Meal Planner API"
+            ],
+            "presentation": {
+                "hidden": false,
+                "group": "fullstack",
+                "order": 2
+            },
+            "stopAll": true
+        }
+    ]
+}

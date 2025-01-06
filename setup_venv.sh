@@ -20,6 +20,13 @@ $python_cmd -m venv "$venv_name"
 source "./$venv_name/bin/activate"
 echo "Installing dependencies..."
 
+# TODO: Check if there is a requirements.txt file and if it exists, install the dependencies from it.
+if [ -f "requirements.txt" ]; then
+    pip install -r requirements.txt
+else
+    echo "No requirements.txt file found. Installing dependencies from pip..."
+fi
+
 # Upgrade pip and install build tools
 pip install --upgrade pip setuptools wheel
 

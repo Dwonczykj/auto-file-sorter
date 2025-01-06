@@ -1,0 +1,88 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "nvm use",
+            "type": "shell",
+            "options": {
+                "shell": {
+                    "executable": "/bin/zsh",
+                    "args": [
+                        "-i",
+                        "-c"
+                    ]
+                }
+            },
+            "command": "source /Users/joey/.zshrc && nvm use --lts"
+            // "command": "source /Users/joey/.zshrc && /opt/homebrew/Cellar/stripe-cli/1.21.2/bin/stripe listen --forward-to localhost:5003/accept-pay-as-you-go-user-stripe-webhook"
+        },
+        {
+            "label": "clear-terminal",
+            "type": "shell",
+            "command": "clear",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "windows": {
+                "command": "cls"
+            }
+        },
+        {
+            "label": "stripe-listen",
+            "type": "shell",
+            "options": {
+                "shell": {
+                    "executable": "/bin/zsh",
+                    "args": [
+                        "-i",
+                        "-c"
+                    ]
+                }
+            },
+            "command": "source /Users/joey/.zshrc && stripe listen --forward-to 127.0.0.1:5001/accept-pay-as-you-go-user-stripe-webhook"
+            // "command": "source /Users/joey/.zshrc && /opt/homebrew/Cellar/stripe-cli/1.21.2/bin/stripe listen --forward-to localhost:5003/accept-pay-as-you-go-user-stripe-webhook"
+        },
+        {
+            "label": "echo",
+            "type": "shell",
+            "command": "echo Hello"
+        },
+        {
+            "label": "Start ngrok with venv",
+            "type": "shell",
+            "command": "${workspaceFolder}/auto_file_sorter_venv/bin/pyngrok",
+            "args": [
+                "http",
+                "8000",
+                "--log-level",
+                "debug"
+            ],
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": {
+                    "regexp": "^\\s*Forwarding\\s+(https?://[^\\s]+)\\s+->\\s+",
+                    "message": 1
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": ".*starting ngrok.*",
+                    "endsPattern": ".*Forwarding.*"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "new",
+                "group": "ngrok"
+            },
+            "options": {
+                "env": {
+                    "PATH": "${env:PATH}:${workspaceFolder}/auto_file_sorter_venv/bin",
+                    "VIRTUAL_ENV": "${workspaceFolder}/auto_file_sorter_venv"
+                }
+            }
+        }
+    ]
+}
