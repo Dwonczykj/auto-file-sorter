@@ -778,9 +778,9 @@ class RecipeSearch:
         min_calories: int = 200,
         max_calories: int = 750,
         constraints: Optional[mpc.MealPlanConstraints] = None
-    ) -> List[Dict]:
+    ) -> list[ValidateAndAdaptRecipeResult]:
         """Enhanced recipe search from embedding with similarity matching and adaptation."""
-        valid_recipes = []
+        valid_recipes: list[ValidateAndAdaptRecipeResult] = []
         constraints = constraints or mpc.MealPlanConstraints.default().copy_with(
             calories=mpc.Calories(min=min_calories, max=max_calories)
         )
