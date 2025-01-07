@@ -46,6 +46,8 @@ import plotly.graph_objects as go
 import io
 import base64
 
+import meal_planner_agent.meal_plan_constraints_pd as mpc
+
 
 # Constants
 PROBABILITY_OF_RECIPE_IN_URL = 0.7
@@ -69,70 +71,199 @@ class Config:
 
 
 TSLI = TypeVar('TSLI', bound=Literal['integer', 'string', 'boolean'])
+TANY = TypeVar('TANY', covariant=True)
 
 
-class _SchemaTypeVal(TypedDict, Generic[TSLI]):
-    type: TSLI
+class _SchemaTypeVal(TypedDict):
+    type: Literal['integer', 'string', 'boolean']
 
 
-class _SchemaTypeList(TypedDict, Generic[TSLI]):
+class _SchemaTypeList(TypedDict):
     type: Literal['array']
-    items: _SchemaTypeVal[TSLI]
+    items: _SchemaTypeVal
 
 
-class _SchemaTypeObject(TypedDict, Generic[TSLI]):
+class _SchemaTypeObject(TypedDict, Generic[TANY]):
     type: Literal['object']
-    properties: Dict[str, _SchemaTypeVal[TSLI]]
+    properties: TANY
 
 
-TSVI = TypeVar('TSVI', bound=int | _SchemaTypeVal[Literal['integer']])
-TSAI = TypeVar('TSAI', bound=list[int] | _SchemaTypeList[Literal['integer']])
-TSDI = TypeVar('TSDI', bound=dict[str, int] |
-               _SchemaTypeObject[Literal['integer']])
-TSVS = TypeVar('TSVS', bound=str | _SchemaTypeVal[Literal['string']])
-TSAS = TypeVar('TSAS', bound=list[str] | _SchemaTypeList[Literal['string']])
-TSDS = TypeVar('TSDS', bound=dict[str, str] |
-               _SchemaTypeObject[Literal['string']])
-TSVB = TypeVar('TSVB', bound=bool | _SchemaTypeVal[Literal['boolean']])
-TSAB = TypeVar('TSAB', bound=list[bool] | _SchemaTypeList[Literal['boolean']])
-TSDB = TypeVar('TSDB', bound=dict[str, bool] |
-               _SchemaTypeObject[Literal['boolean']])
+class _CustomTypeDummyObjectProps(TypedDict):
+    protein: _SchemaTypeVal | int
+    carbs: _SchemaTypeVal | int
+    fat: _SchemaTypeVal | int
+
+
+DUMMY_VAL: _SchemaTypeVal | bool = {"type": "boolean"}
+DUMMY_ARRAY: _SchemaTypeList | list[str] = {
+    "type": "array", "items": {"type": "string"}}
+DUMMY_OBJECT_PROPS: _CustomTypeDummyObjectProps = {"protein": {
+    "type": "integer"}, "carbs": {"type": "integer"}, "fat": {"type": "integer"}}
+DUMMY_OBJECT: _SchemaTypeObject | _CustomTypeDummyObjectProps = {
+    "type": "object", "properties": DUMMY_OBJECT_PROPS}
+
+DUMMY = {
+    "is_recipe": {"type": "boolean"},
+    "recipe_name": {"type": "string"},
+    # "title": {"type": "string"},
+    "calories": {"type": "integer"},
+    # "calories_per_serving": {"type": "integer"},
+    # "cooking_time_minutes": {"type": "integer"},
+    # "servings": {"type": "integer"},
+    "ingredients": {"type": "array", "items": {"type": "string"}},
+    # "instructions": {"type": "array", "items": {"type": "string"}},
+    # "images": {"type": "array", "items": {"type": "string"}},
+    # "content": {"type": "string"},
+    "macros": {
+        "type": "object",
+        "properties": {
+            "protein": {"type": "integer"},
+            "carbs": {"type": "boolean"},
+            "fat": {"type": "string"}
+        }
+    },
+    # "micros": {
+    #     "type": "object",
+    #     "properties": {
+    #         "vitamin_a": {"type": "integer"},
+    #         "vitamin_c": {"type": "integer"},
+    #         "vitamin_d": {"type": "integer"},
+    #         "vitamin_e": {"type": "integer"},
+    #         "vitamin_k": {"type": "integer"},
+    #         "calcium": {"type": "integer"},
+    #         "iron": {"type": "integer"},
+    #         "magnesium": {"type": "integer"},
+    #         "phosphorus": {"type": "integer"}
+    #     }
+    # },
+    # "dietary_info": {
+    #     "type": "object",
+    #     "properties": {
+    #         "vegetarian": {"type": "boolean"},
+    #         "vegan": {"type": "boolean"},
+    #         "gluten_free": {"type": "boolean"}
+    #     }
+    # }
+}
+
+
+# TSVI = TypeVar('TSVI', bound=int | _SchemaTypeVal[Literal['integer']])
+# TSAI = TypeVar('TSAI', bound=list[int] | _SchemaTypeList[Literal['integer']])
+# TSDI = TypeVar('TSDI', bound=dict[str, int] |
+#                _SchemaTypeObject[Literal['integer']])
+# TSVS = TypeVar('TSVS', bound=str | _SchemaTypeVal[Literal['string']])
+# TSAS = TypeVar('TSAS', bound=list[str] | _SchemaTypeList[Literal['string']])
+# TSDS = TypeVar('TSDS', bound=dict[str, str] |
+#                _SchemaTypeObject[Literal['string']])
+# TSVB = TypeVar('TSVB', bound=bool | _SchemaTypeVal[Literal['boolean']])
+# TSAB = TypeVar('TSAB', bound=list[bool] | _SchemaTypeList[Literal['boolean']])
+# TSDB = TypeVar('TSDB', bound=dict[str, bool] |
+#                _SchemaTypeObject[Literal['boolean']])
 # TSI = TSVI | TSDI | TSAI
 # TSB = TSVB | TSDB | TSAB
 # TSS = TSVS | TSDS | TSAS
-TSI = TypeVar('TSI', bound=int | _SchemaTypeVal[Literal['integer']] |
-              _SchemaTypeList[Literal['integer']] | _SchemaTypeObject[Literal['integer']])
-TSB = TypeVar('TSB', bound=bool | _SchemaTypeVal[Literal['boolean']] |
-              _SchemaTypeList[Literal['boolean']] | _SchemaTypeObject[Literal['boolean']])
-TSS = TypeVar('TSS', bound=str | _SchemaTypeVal[Literal['string']] |
-              _SchemaTypeList[Literal['string']] | _SchemaTypeObject[Literal['string']])
+
+# TSI = TypeVar('TSI', bound=int | _SchemaTypeVal[Literal['integer']] |
+#               _SchemaTypeList[Literal['integer']] | _SchemaTypeObject[Literal['integer']])
+# TSB = TypeVar('TSB', bound=bool | _SchemaTypeVal[Literal['boolean']] |
+#               _SchemaTypeList[Literal['boolean']] | _SchemaTypeObject[Literal['boolean']])
+# TSS = TypeVar('TSS', bound=str | _SchemaTypeVal[Literal['string']] |
+#               _SchemaTypeList[Literal['string']] | _SchemaTypeObject[Literal['string']])
 
 
-class ExtractRecipeDataSchemaMacros(TypedDict, Generic[TSI]):
-    protein: TSI
-    carbs: TSI
-    fat: TSI
+class ExtractRecipeDataSchemaMacros(TypedDict):
+    protein: int | _SchemaTypeVal
+    carbs: int | _SchemaTypeVal
+    fat: int | _SchemaTypeVal
 
 
-class ExtractRecipeDataSchemaMicros(TypedDict, Generic[TSI]):
-    vitamin_a: TSI
-    vitamin_c: TSI
-    vitamin_d: TSI
-    vitamin_e: TSI
-    vitamin_k: TSI
-    calcium: TSI
-    iron: TSI
-    magnesium: TSI
-    phosphorus: TSI
+class ExtractRecipeDataSchemaMicros(TypedDict):
+    vitamin_a: int | _SchemaTypeVal
+    vitamin_c: int | _SchemaTypeVal
+    vitamin_d: int | _SchemaTypeVal
+    vitamin_e: int | _SchemaTypeVal
+    vitamin_k: int | _SchemaTypeVal
+    calcium: int | _SchemaTypeVal
+    iron: int | _SchemaTypeVal
+    magnesium: int | _SchemaTypeVal
+    phosphorus: int | _SchemaTypeVal
 
 
-class ExtractRecipeDataSchemaDietaryInfo(TypedDict, Generic[TSB]):
-    vegetarian: TSB
-    vegan: TSB
-    gluten_free: TSB
+class ExtractRecipeDataSchemaDietaryInfo(TypedDict):
+    vegetarian: bool | _SchemaTypeVal
+    vegan: bool | _SchemaTypeVal
+    gluten_free: bool | _SchemaTypeVal
 
 
-class ExtractRecipeDataSchemaProperties(TypedDict, Generic[TSI, TSS, TSB]):
+class ExtractRecipeDataSchemaMacrosPydantic(BaseModel):
+    protein: int
+    carbs: int
+    fat: int
+
+
+class ExtractRecipeDataSchemaMicrosPydantic(BaseModel):
+    vitamin_a: int
+    vitamin_c: int
+    vitamin_d: int
+    vitamin_e: int
+    vitamin_k: int
+    calcium: int
+    iron: int
+    magnesium: int
+    phosphorus: int
+
+
+class ExtractRecipeDataSchemaDietaryInfoPydantic(BaseModel):
+    vegetarian: bool
+    vegan: bool
+    gluten_free: bool
+    contains_meat: bool
+    contains_dairy: bool
+    contains_nuts: bool
+    contains_soy: bool
+    contains_gluten: bool
+    contains_eggs: bool
+    contains_shellfish: bool
+    contains_peanuts: bool
+    contains_tree_nuts: bool
+    contains_wheat: bool
+    contains_fish: bool
+
+
+class ExtractRecipeDataSchemaPropertiesPydantic(BaseModel):
+    """
+    Pydantic Class Implementation of the TypedDict with TSS -> str, TSB -> bool, TSI -> int and ignoring _SchemaTypeObject, _SchemaTypeList, _SchemaTypeVal
+    """
+    recipe_name: str
+    calories_per_serving: int
+    is_recipe: bool
+    servings: int
+    title: str
+    calories: int
+    macros: ExtractRecipeDataSchemaMacrosPydantic
+    micros: ExtractRecipeDataSchemaMicrosPydantic
+    images: list[str]
+    cooking_time_minutes: int
+    ingredients: list[str]
+    instructions: list[str]
+    dietary_info: ExtractRecipeDataSchemaDietaryInfoPydantic
+    content: str
+    url: str
+    last_updated: str
+
+
+class ValidateAndAdaptRecipeResult(ExtractRecipeDataSchemaPropertiesPydantic):
+    original_recipe_url: str
+    is_modified: bool
+    user_approved: bool
+
+
+TSS = str | _SchemaTypeVal  # [Literal["string"]]
+TSI = int | _SchemaTypeVal  # [Literal["integer"]]
+TSB = bool | _SchemaTypeVal  # [Literal["boolean"]]
+
+
+class ExtractRecipeDataSchemaProperties(TypedDict):
     """
     Properties of the recipe data schema.
     """
@@ -142,20 +273,24 @@ class ExtractRecipeDataSchemaProperties(TypedDict, Generic[TSI, TSS, TSB]):
     servings: TSI
     title: TSS
     calories: TSI
-    macros: ExtractRecipeDataSchemaMacros[TSI] | _SchemaTypeObject[Literal["integer"]]
-    micros: ExtractRecipeDataSchemaMicros[TSI] | _SchemaTypeObject[Literal["integer"]]
-    images: list[TSS] | _SchemaTypeList[Literal["string"]]
+    macros: ExtractRecipeDataSchemaMacros | _SchemaTypeObject[ExtractRecipeDataSchemaMacros]
+    micros: ExtractRecipeDataSchemaMicros | _SchemaTypeObject[ExtractRecipeDataSchemaMicros]
+    images: list[str] | _SchemaTypeList
     cooking_time_minutes: TSI
-    ingredients: list[TSS] | _SchemaTypeList[Literal["string"]]
-    instructions: list[TSS] | _SchemaTypeList[Literal["string"]]
-    dietary_info: ExtractRecipeDataSchemaDietaryInfo[TSB] | _SchemaTypeObject[Literal["boolean"]]
+    ingredients: list[str] | _SchemaTypeList
+    instructions: list[str] | _SchemaTypeList
+    dietary_info: ExtractRecipeDataSchemaDietaryInfo | _SchemaTypeObject[
+        ExtractRecipeDataSchemaDietaryInfo]
     content: TSS
-    url: TSS
-    last_updated: TSS
 
 
-class ExtractRecipeDataSchema(TypedDict, Generic[TSI, TSS, TSB]):
-    properties: ExtractRecipeDataSchemaProperties[TSI, TSS, TSB]
+class ExtractRecipeDataSchemaPropertiesWithMetadata(ExtractRecipeDataSchemaProperties):
+    url: str
+    last_updated: str
+
+
+class ExtractRecipeDataSchema(TypedDict):
+    properties: ExtractRecipeDataSchemaProperties
     required: list[str]
 
 
@@ -197,10 +332,11 @@ class URLProcessingMonitor:
         with self.log_file.open('a') as f:
             f.write(json.dumps(entry) + '\n')
 
+        url: str = entry['url']
         # Print real-time update
         status = "✅" if entry.get(
             'probability', 0) >= PROBABILITY_OF_RECIPE_IN_URL else "❌"
-        print(f"\r{status} Processing: {entry['url'][:60]}{'...' if len(entry['url']) > 60 else ''} "
+        print(f"\r{status} Processing: {url[:60]}{'...' if len(entry['url']) > 60 else ''} "
               f"(prob: {entry.get('probability', 0):.2f})", flush=True)
 
     def log_url_processing(self, **kwargs):
@@ -282,11 +418,7 @@ class RecipeSearch:
         self.output_parser = PydanticOutputParser(
             pydantic_object=RecipeAnalysisResult)
 
-        self.schema_extract_recipe_data: ExtractRecipeDataSchema[
-            _SchemaTypeVal[Literal["integer"]],
-            _SchemaTypeVal[Literal["string"]],
-            _SchemaTypeVal[Literal["boolean"]]
-        ] = {
+        self.schema_extract_recipe_data: ExtractRecipeDataSchema = {
             "properties": {
                 "is_recipe": {"type": "boolean"},
                 "recipe_name": {"type": "string"},
@@ -532,7 +664,11 @@ class RecipeSearch:
         # Initialize UMAP for visualization
         self.umap_reducer = UMAP(n_components=2, random_state=42)
         self.pacmap_reducer = pacmap.PaCMAP(
-            n_components=2, n_neighbors=None, MN_ratio=0.5, FP_ratio=2.0, random_state=1
+            n_components=2,
+            n_neighbors=10,
+            MN_ratio=0.5,
+            FP_ratio=2.0,
+            random_state=1
         )
         self.embedded_recipes = None
         self.recipe_names = None
@@ -574,55 +710,65 @@ class RecipeSearch:
             store.save_local(str(self.faiss_store_path))
             return store
 
-    def _recipe_to_text(self, recipe: Dict | ExtractRecipeDataSchemaProperties) -> str:
+    def _recipe_to_text(self, recipe: ExtractRecipeDataSchemaPropertiesPydantic) -> str:
         """Convert recipe to searchable text format."""
         return f"""
-        Recipe: {recipe.get('title', '')}
-        Calories: {recipe.get('calories_per_serving', 0)}
-        Protein: {recipe.get('macros', {}).get('protein', 0)}g
-        Ingredients: {', '.join(recipe.get('ingredients', []))}
-        Dietary Info: {json.dumps(recipe.get('dietary_info', {}))}
-        Cooking Time: {recipe.get('cooking_time_minutes', 0)} minutes
+        Recipe: {recipe.recipe_name}
+        Calories: {recipe.calories_per_serving}
+        Protein: {recipe.macros.protein}g
+        Ingredients: {', '.join(recipe.ingredients)}
+        Dietary Info: {[k for k, v in recipe.dietary_info.model_dump().items() if v == "yes"]}
+        Cooking Time: {recipe.cooking_time_minutes} minutes
         """
 
-    async def _find_similar_recipes(self, constraints: Dict) -> List[Dict]:
+    async def _find_similar_recipes(self, constraints: mpc.MealPlanConstraints) -> List[ExtractRecipeDataSchemaPropertiesPydantic | Dict]:
         """Find recipes similar to constraints using FAISS."""
         query = self._constraints_to_query(constraints)
         similar_docs = self.recipe_store.similarity_search(query, k=5)
-        return [doc.metadata for doc in similar_docs]
+        try:
+            return [ExtractRecipeDataSchemaPropertiesPydantic(**doc.metadata) for doc in similar_docs]
+        except Exception as e:
+            logging.error(f"Error finding similar recipes: {e}")
+            return [doc.metadata for doc in similar_docs]
 
-    def _constraints_to_query(self, constraints: Dict) -> str:
+    def _constraints_to_query(self, constraints: mpc.MealPlanConstraints) -> str:
         """Convert constraints to search query text."""
         return f"""
         Recipe with:
-        Calories between {constraints.get('min_calories', 0)} and {constraints.get('max_calories', 1000)}
-        Cooking time under {constraints.get('max_cooking_time', 60)} minutes
-        Dietary restrictions: {', '.join(constraints.get('dietary_restrictions', []))}
-        Must include: {', '.join(constraints.get('must_include', []))}
-        Must avoid: {', '.join(constraints.get('must_avoid', []))}
+        Calories between {constraints.calories.min} and {constraints.calories.max}
+        Protein between {constraints.protein.min} and {constraints.protein.max}
+        Cooking time under {constraints.cooking_time_minutes.max} minutes
+        Dietary restrictions: {', '.join([k for k, v in constraints.dietary_restrictions.model_dump().items() if v == "yes"])}
+        Preffered ingredients: {', '.join(constraints.ingredients_to_include)}
+        Must avoid ingredients: {', '.join(constraints.ingredients_to_avoid)}
         """
 
-    async def _validate_and_adapt_recipe(self, recipe: Dict, constraints: Dict) -> Optional[Dict]:
+    async def _validate_and_adapt_recipe(self, recipe: ExtractRecipeDataSchemaPropertiesPydantic, constraints: mpc.MealPlanConstraints) -> Optional[ValidateAndAdaptRecipeResult]:
         """Validate recipe against constraints and adapt if possible."""
         prompt = self.recipe_adaptation_prompt.format(
-            constraints=json.dumps(constraints, indent=2),
-            recipe=json.dumps(recipe, indent=2)
+            constraints=constraints.model_dump_json(indent=2),
+            recipe=recipe.model_dump_json(indent=2)
         )
 
         response = await self.llm.apredict(prompt)
         result = json.loads(response)
 
         if result['satisfies_constraints']:
-            return recipe
+            original_recipe = ValidateAndAdaptRecipeResult(
+                **recipe.model_dump())
+            original_recipe.is_modified = False
+            original_recipe.user_approved = True
+            return original_recipe
         elif result['can_be_modified'] and result['modified_recipe']:
             print("\nProposed recipe modifications:")
             print("\n".join(result['modifications_made']))
 
             if input("\nAccept modified recipe? (y/n): ").lower() == 'y':
-                modified_recipe = result['modified_recipe']
-                modified_recipe['is_modified'] = True
-                modified_recipe['original_recipe_url'] = recipe['url']
-                modified_recipe['user_approved'] = True
+                modified_recipe = ValidateAndAdaptRecipeResult(
+                    **result['modified_recipe'])
+                modified_recipe.is_modified = True
+                modified_recipe.original_recipe_url = recipe.url
+                modified_recipe.user_approved = True
                 return modified_recipe
 
         return None
@@ -631,18 +777,19 @@ class RecipeSearch:
         self,
         min_calories: int = 200,
         max_calories: int = 750,
-        constraints: Optional[Dict] = None
+        constraints: Optional[mpc.MealPlanConstraints] = None
     ) -> List[Dict]:
-        """Enhanced recipe search with similarity matching and adaptation."""
+        """Enhanced recipe search from embedding with similarity matching and adaptation."""
         valid_recipes = []
-        constraints = constraints or {
-            'min_calories': min_calories,
-            'max_calories': max_calories
-        }
+        constraints = constraints or mpc.MealPlanConstraints.default().copy_with(
+            calories=mpc.Calories(min=min_calories, max=max_calories)
+        )
 
         # First try finding similar recipes from existing database
         similar_recipes = await self._find_similar_recipes(constraints)
         for recipe in similar_recipes:
+            if not isinstance(recipe, ExtractRecipeDataSchemaPropertiesPydantic):
+                recipe = ExtractRecipeDataSchemaPropertiesPydantic(**recipe)
             adapted_recipe = await self._validate_and_adapt_recipe(recipe, constraints)
             if adapted_recipe:
                 valid_recipes.append(adapted_recipe)
@@ -652,8 +799,18 @@ class RecipeSearch:
         # If we need more recipes, search for new ones
         if len(valid_recipes) < Config.RECIPE_SEARCH_MAX_RESULTS:
             # Use existing search logic but skip already processed URLs
-            query = f"vegetarian recipe websites with recipes between {
-                min_calories} and {max_calories} calories"
+            constraints = constraints or mpc.MealPlanConstraints.default().copy_with(
+                calories=mpc.Calories(min=min_calories, max=max_calories)
+            )
+            query = (
+                f"Individual meal recipe printable instructions for a [{
+                    constraints.dietary_restrictions.to_label()}]"
+            )
+            # query = (
+            #     f"Search for recipe websites listing recipes for a [{
+            #         constraints.dietary_restrictions.to_label()}]"
+            # )
+
             initial_results = self.search_tool.invoke({"query": query})
 
             for result in initial_results:
@@ -676,7 +833,7 @@ class RecipeSearch:
                                 # Add new recipe to FAISS store
                                 self.recipe_store.add_texts(
                                     [self._recipe_to_text(recipe)],
-                                    metadatas=[recipe]
+                                    metadatas=[recipe.model_dump()]
                                 )
 
                                 # Try adapting the recipe
@@ -1188,8 +1345,21 @@ class RecipeSearch:
             raise e
             return []
 
-    async def _extract_recipe_data(self, content: str, url: str) -> Optional[ExtractRecipeDataSchemaProperties[int, str]]:
+    async def _extract_recipe_data(self, url: str, content: Optional[str] = None) -> Tuple[Optional[ExtractRecipeDataSchemaPropertiesPydantic], Optional[str]]:
         """Extract recipe data from content using LLM."""
+        logging.debug("Processing recipe page: %s", url)
+        if not content:
+            try:
+                loader = WebBaseLoader(url)
+                docs = await loader.aload()  # type: ignore
+                content = docs[0].page_content
+                logging.debug("Loaded content from %s: %d characters",
+                              url, len(content))
+            except Exception as e:
+                logging.error("Error processing %s: %s", url, e)
+                content = None
+                raise e
+        # Validate and extract recipe info
         try:
             schema = self.schema_extract_recipe_data
 
@@ -1202,143 +1372,19 @@ class RecipeSearch:
             result: RecipeDataChainInvoked = await chain.ainvoke(content)
 
             if result and len(result['text']) > 0:
-                recipe_data: ExtractRecipeDataSchemaProperties = result['text'][0]
+                recipe_data: ExtractRecipeDataSchemaPropertiesWithMetadata = result['text'][0]
                 recipe_data['url'] = url
                 recipe_data['last_updated'] = datetime.now().isoformat()
-                return recipe_data
-            return None
+                # TODO: This will be solved by using many generics in the class defs, DONT DO THIS NOW.
+                recipe_data_pydantic = \
+                    ExtractRecipeDataSchemaPropertiesPydantic(**recipe_data)
+                return recipe_data_pydantic, content
+            return None, content
 
         except Exception as e:
             logging.error(f"Error extracting recipe data: {e}")
             raise e
-            return None
-
-    # async def _validate_recipe(self, content: str) -> Dict:
-    #     """Use LLM to validate and extract recipe information."""
-    #     logging.debug(
-    #         "Validating recipe content length: %d characters", len(content))
-    #     try:
-    #         schema = self.schema_extract_recipe_data
-    #         chain = create_extraction_chain(schema, self.llm)
-    #         result = await chain.arun(content)
-    #         recipe_info = result[0] if result else {}
-    #         logging.debug("Recipe validation result: %s", {
-    #             "is_recipe": recipe_info.get("is_recipe"),
-    #             "name": recipe_info.get("recipe_name"),
-    #             "calories": recipe_info.get("calories_per_serving"),
-    #             "ingredients_count": len(recipe_info.get("ingredients", []))
-    #         })
-    #         return recipe_info
-    #     except Exception as e:
-    #         logging.error("Error validating recipe: %s", e)
-    #         return {}
-
-    async def _process_recipe_page(self, url: str, min_calories: int, max_calories: int) -> Optional[Dict]:
-        """Process a single recipe page and validate it meets the criteria."""
-        logging.debug("Processing recipe page: %s", url)
-        try:
-            loader = WebBaseLoader(url)
-            docs = await loader.aload()  # type: ignore
-            content = docs[0].page_content
-            logging.debug("Loaded content from %s: %d characters",
-                          url, len(content))
-
-            # Validate and extract recipe info
-            # recipe_info = await self._validate_recipe(content)
-            recipe_info = await self._extract_recipe_data(content, url)
-            if not recipe_info:
-                logging.debug("No recipe info found for %s", url)
-                return None
-
-            calories = recipe_info.get("calories_per_serving", 0)
-            if (recipe_info.get("is_recipe") and
-                    min_calories <= calories <= max_calories):
-                logging.debug("Valid recipe found: %s (calories: %d)",
-                              recipe_info.get("recipe_name"), calories)
-                return {
-                    "title": recipe_info.get("recipe_name", ""),
-                    "url": url,
-                    "content": content,
-                    "calories": calories,
-                    "cooking_time": recipe_info.get("cooking_time_minutes"),
-                    "ingredients": recipe_info.get("ingredients", [])
-                }
-            else:
-                logging.debug("Recipe rejected: is_recipe=%s, calories=%d",
-                              recipe_info.get("is_recipe"), calories)
-        except Exception as e:
-            logging.error("Error processing %s: %s", url, e)
-            raise e
-        return None
-
-    async def search_recipes(self, min_calories: int = 200, max_calories: int = 750) -> List[Dict]:
-        """Search for vegetarian recipes within specified calorie range."""
-        logging.debug("Starting recipe search: calories %d-%d",
-                      min_calories, max_calories)
-        query = (
-            f"vegetarian recipe websites with recipes between {
-                min_calories} and {max_calories} calories"
-        )
-
-        logging.debug("Executing Tavily search with query: %s", query)
-        initial_results = self.search_tool.invoke({"query": query})
-        logging.debug("Got %d initial search results", len(initial_results))
-
-        # Collect all recipe pages
-        recipe_pages = []
-        for result in initial_results:
-            if isinstance(result, dict):
-                url = result.get("url", "")
-                content = result.get("content", "")
-
-                if self._is_recipe_listing_page(url):
-                    recipe_links = await self._extract_recipe_links(url)
-                    recipe_pages.extend(recipe_links)
-                    logging.debug("Added %d recipe links from listing page %s",
-                                  len(recipe_links), url)
-                elif self._is_likely_recipe_page(url, content):
-                    recipe_pages.append(url)
-                    logging.debug("Added likely recipe page: %s", url)
-                else:
-                    logging.debug("Skipping non-recipe page: %s", url)
-
-        logging.debug("Found total of %d potential recipe pages",
-                      len(recipe_pages))
-
-        # Process recipes in batches
-        batch_size = 3
-        valid_recipes = []
-
-        for i in range(0, len(recipe_pages[:10]), batch_size):
-            batch = recipe_pages[i:i + batch_size]
-            logging.debug("Processing batch %d-%d of recipes",
-                          i, i + len(batch))
-
-            batch_results = await self._process_url_batch(batch, min_calories, max_calories)
-
-            # Save both recipe pages and valid recipes to database
-            for recipe in batch_results:
-                self._save_valid_recipe(recipe)
-                self._save_recipe_page(
-                    recipe['url'],
-                    recipe.get('probability', 0),
-                    'recipe_page'
-                )
-
-            valid_recipes.extend(batch_results)
-
-            if len(valid_recipes) >= Config.RECIPE_SEARCH_MAX_RESULTS:
-                logging.debug(
-                    "Reached target of %d valid recipes, stopping search",
-                    Config.RECIPE_SEARCH_MAX_RESULTS
-                )
-                break
-
-            await asyncio.sleep(0.5)  # Small delay between batches
-
-        logging.debug("Search complete. Found %d valid recipes",
-                      len(valid_recipes))
-        return valid_recipes[:Config.RECIPE_SEARCH_MAX_RESULTS]
+            return None, content
 
     def _recipes_are_similar(self, recipe1: Dict, recipe2: Dict, threshold: float = 0.7) -> bool:
         """Check if two recipes are similar based on ingredients and instructions."""
@@ -1461,35 +1507,6 @@ class RecipeSearch:
             logging.error("Error retrieving cached URL probability: %s", e)
             raise e
             return None
-
-    async def _process_url_batch(self, urls: List[str], min_calories: int, max_calories: int) -> List[Dict]:
-        """Process a batch of URLs, using cached results when available."""
-        results = []
-        new_urls = []
-
-        # Check cache first
-        for url in urls:
-            cached_prob = self._get_cached_url_probability(url)
-            if cached_prob is not None and cached_prob >= PROBABILITY_OF_RECIPE_IN_URL:
-                logging.debug(
-                    "Using cached high-probability result for %s", url)
-                # Fetch full recipe details for cached high-probability URLs
-                recipe = await self._process_recipe_page(url, min_calories, max_calories)
-                if recipe:
-                    results.append(recipe)
-            else:
-                new_urls.append(url)
-
-        if new_urls:
-            # Process new URLs in parallel
-            tasks = [
-                self._process_recipe_page(url, min_calories, max_calories)
-                for url in new_urls
-            ]
-            new_results = await asyncio.gather(*tasks)
-            results.extend([r for r in new_results if r is not None])
-
-        return results
 
     def view_url_log(self, min_probability: float = 0.0, show_errors: bool = True) -> None:
         """
@@ -1666,8 +1683,8 @@ class RecipeSearch:
             raise e
             exit(1)
 
-    def _save_valid_recipe(self, recipe: ExtractRecipeDataSchemaProperties):
-        """Save or update valid recipe information."""
+    def _save_valid_recipe(self, recipe: ExtractRecipeDataSchemaPropertiesPydantic):
+        """Save or update valid recipe information in both the database and the FAISS index."""
         try:
             # Save to SQLite
             self.persistent_cursor.execute('''
@@ -1679,32 +1696,33 @@ class RecipeSearch:
                  is_modified, original_recipe_url, user_approved, modification_notes)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                recipe['url'],
-                recipe.get('recipe_name', ''),
-                recipe.get('title', ''),
-                recipe.get('calories', 0),
-                recipe.get('calories_per_serving', 0),
-                recipe.get('cooking_time_minutes', 0),
-                recipe.get('servings', 0),
-                json.dumps(recipe.get('ingredients', [])),
-                json.dumps(recipe.get('instructions', [])),
-                recipe.get('content', ''),
-                json.dumps(recipe.get('images', [])),
+                recipe.url,
+                recipe.recipe_name,
+                recipe.title,
+                recipe.calories,
+                recipe.calories_per_serving,
+                recipe.cooking_time_minutes,
+                recipe.servings,
+                json.dumps(recipe.ingredients),
+                json.dumps(recipe.instructions),
+                recipe.content,
+                json.dumps(recipe.images),
                 datetime.now().isoformat(),
-                recipe.get('is_recipe', False),
-                json.dumps(recipe.get('macros', {})),
-                json.dumps(recipe.get('micros', {})),
-                json.dumps(recipe.get('dietary_info', {})),
-                recipe.get('is_modified', False),
-                recipe.get('original_recipe_url', None),
-                recipe.get('user_approved', False),
-                recipe.get('modification_notes', None)
+                recipe.is_recipe,
+                json.dumps(recipe.macros),
+                json.dumps(recipe.micros),
+                json.dumps(recipe.dietary_info),
+                False,
+                recipe.url,
+                False,
+                ""
             ))
             self.persistent_conn.commit()
 
             # Update FAISS index
             recipe_text = self._recipe_to_text(recipe)
-            self.recipe_store.add_texts([recipe_text], metadatas=[recipe])
+            self.recipe_store.add_texts(
+                [recipe_text], metadatas=[recipe.model_dump()])
             self.recipe_store.save_local(str(self.faiss_store_path))
 
             # Verify index integrity
@@ -1713,7 +1731,7 @@ class RecipeSearch:
                 self.rebuild_faiss_index()
 
         except Exception as e:
-            logging.error("Error saving recipe %s: %s", recipe['url'], e)
+            logging.error("Error saving recipe %s: %s", recipe.url, e)
             raise e
             exit(1)
 
@@ -1779,7 +1797,7 @@ class RecipeSearch:
             logging.error("Error saving path analysis: %s", e)
             raise e
 
-    async def process_url(self, url: str) -> Optional[ExtractRecipeDataSchemaProperties]:
+    async def process_url(self, url: str) -> Optional[ExtractRecipeDataSchemaPropertiesPydantic]:
         """Process a URL and determine if it contains a valid recipe."""
         try:
             # First check if URL has already been processed
@@ -1802,9 +1820,9 @@ class RecipeSearch:
                 return None
 
             # Analyze content for recipe
-            recipe_data = await self._extract_recipe_data(content, url)
+            recipe_data, content = await self._extract_recipe_data(content, url)
 
-            if recipe_data and recipe_data.get('is_recipe', False):
+            if recipe_data and recipe_data.is_recipe:
                 self._save_valid_recipe(recipe_data)
                 self._update_processing_status(url, 'valid_recipe')
                 return recipe_data
@@ -2139,6 +2157,8 @@ async def test_recipe_search():
             day_constraints = json.load(f)
         with open('meal_planner_agent/meal_plan_constraints.json', 'r') as f:
             meal_plan_constraints = json.load(f)
+        constraints = mpc.MealPlanConstraints(
+            **{**recipe_constraints, **day_constraints, **meal_plan_constraints})
 
         # Extract relevant constraints for recipe search
         calories = recipe_constraints.get('calories', {})
@@ -2165,7 +2185,8 @@ async def test_recipe_search():
         print("\nSearching for recipes...")
         recipes = await recipe_searcher.search_recipes(
             min_calories=min_calories,
-            max_calories=max_calories
+            max_calories=max_calories,
+            constraints=constraints
         )
 
         # Print results

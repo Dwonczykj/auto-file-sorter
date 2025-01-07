@@ -1,7 +1,7 @@
 # https://pub.towardsai.net/pydantic-ai-web-scraper-llama-3-3-python-powerful-ai-research-agent-6d634a9565fe
 # Pydantic AI Web Scraper with Ollama and Streamlit AI Chatbot
 
-from recipe_search import RecipeSearch
+from recipe_search import RecipeSearch, ValidateAndAdaptRecipeResult
 import json
 from dotenv import load_dotenv
 from tavily import AsyncTavilyClient
@@ -578,45 +578,28 @@ class MealPlannerWorkflow:
 
     async def find_suitable_recipes(self, constraints: MealPlanConstraints):
         """Find recipes that match the given constraints."""
-        min_calories = constraints.calories.min
-        max_calories = constraints.calories.max
-
-        # Consider dietary restrictions
-        query_modifiers = []
-        if constraints.dietary_restrictions:
-            if constraints.dietary_restrictions.vegetarian in ["yes", "normal"]:
-                query_modifiers.append("vegetarian")
-            if constraints.dietary_restrictions.vegan in ["yes", "normal"]:
-                query_modifiers.append("vegan")
-            # Add other dietary restrictions as needed
 
         recipes = await self.recipe_searcher.search_recipes(
-            min_calories=min_calories,
-            max_calories=max_calories
+            min_calories=constraints.calories.min,
+            max_calories=constraints.calories.max,
+            constraints=constraints
         )
 
         # Filter recipes based on other constraints
-        filtered_recipes = []
+        # TODO: Check all the other constraints that need to be filtered out like dietary restrictions, calories, protein, lipids, etc.
+        filtered_recipes: list[ValidateAndAdaptRecipeResult] = []
         for recipe in recipes:
             # Skip recipes with avoided ingredients
-            if any(ingredient in recipe.get("content", "").lower()
+            if any(ingredient in [ing.lower() for ing in recipe.ingredients]
                    for ingredient in constraints.ingredients_to_avoid):
                 continue
 
             # Check cooking time if available in recipe content
-            if "time" in recipe.get("content", "").lower():
-                # This is a simple check - you might want to use regex or better parsing
+            if recipe.cooking_time_minutes:
                 if constraints.cooking_time_minutes:
                     max_time = constraints.cooking_time_minutes.max
-                    if max_time and "minutes" in recipe.get("content", ""):
-                        # Basic time extraction - could be improved
-                        try:
-                            time_st: str | None = (recipe.get("content", "").split("minutes")[0].split()[-1]
-                                                   if "minutes" in recipe.get("content", "") else None)
-                            if time_str and time_str.isdigit() and int(time_str) > max_time:
-                                continue
-                        except:
-                            pass
+                    if max_time and recipe.cooking_time_minutes > max_time:
+                        continue
 
             filtered_recipes.append(recipe)
 
@@ -628,11 +611,7 @@ class MealPlannerWorkflow:
         recipes = await self.find_suitable_recipes(constraints)
 
         recipe_data = [
-            {
-                "name": recipe.get("title", ""),
-                "url": recipe.get("url", ""),
-                "description": recipe.get("content", "")
-            }
+            recipe.model_dump(mode='json', exclude_none=True)
             for recipe in recipes
         ]
 
@@ -644,6 +623,12 @@ class MealPlannerWorkflow:
 
         # Add the recipes to your constraints
         constraints_dict["available_recipes"] = recipe_data
+
+        # TODO: Implement the logic to create a day plan using the available recipes.
+        # TODO: Then check the day plan against the day constraints and adjust the recipes if necessary.
+        # TODO: Then create a week plan from the day plans.
+        # TODO: Then check the week plan against the plan constraints and adjust the recipes if necessary.
+        # TODO: Then save, export and return the week plan.
 
         # Call your existing meal plan generation logic
         result = await do_search(json.dumps(constraints_dict), max_results=2)
