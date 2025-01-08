@@ -1,12 +1,14 @@
 # https://pub.towardsai.net/pydantic-ai-web-scraper-llama-3-3-python-powerful-ai-research-agent-6d634a9565fe
 # Pydantic AI Web Scraper with Ollama and Streamlit AI Chatbot
 
-from meal_planner_agent.meal_planner_workflow_types import SupermarketProduct
+import re
+from meal_planner_agent.meal_planner_workflow_types import ProductMinerals, ProductVitamins, SupermarketProduct, Meal, NutritionalInfo
 import random
 import sqlite3
 from urllib.parse import urlparse
 import warnings
 from meal_planner_agent.load_constraints import load_meal_plan_constraints, load_recipe_constraints, load_day_constraints
+from meal_planner_agent.recipe_search_types import ExtractRecipeDataSchemaPropertiesWithSourcePydantic
 from recipe_search import RecipeSearch, ValidateAndAdaptRecipeResult, ExtractRecipeDataSchemaPropertiesPydantic
 import json
 from dotenv import load_dotenv
@@ -27,7 +29,7 @@ from langchain.chains import create_extraction_chain
 from auto_file_sorter.logging.logging_config import configure_logging
 from meal_planner_agent.meal_plan_constraints_pd import DietaryRestrictions, MealPlanConstraints, MealSizeEnum
 import meal_planner_agent.meal_plan_constraints_pd as mpc
-from meal_planner_agent.meal_plan_output_pd import DayMeals, Meal, WeeklyMealPlan, mock_example_meal_plan
+from meal_planner_agent.meal_plan_output_pd import DayMeals, WeeklyMealPlan, mock_example_meal_plan
 import streamlit as st
 from openai import AsyncOpenAI
 from typing_extensions import TypedDict
@@ -195,25 +197,24 @@ async def get_search(search_data: RunContext[SearchDataclassForDI], query: str, 
 # would just need to decide how we store results if even in the graph for use by the assistant node.
 
 
-async def do_search(constraints: str, max_results: int):
-    # Prepare dependencies
-    current_date = datetime.date.today()
-    date_string = current_date.strftime("%Y-%m-%d")
-    deps = SearchDataclassForDI(
-        todays_date=date_string, constraints=constraints, max_results=max_results)
-    query = prompt.format(CONSTRAINTS_JSON=constraints)
-    # Inject dependencies into the agent
-    logging.info(f"Query: {query}")
-    logging.info(f"Deps: {deps}")
+# async def do_search(constraints: str, max_results: int):
+#     # Prepare dependencies
+#     current_date = datetime.date.today()
+#     date_string = current_date.strftime("%Y-%m-%d")
+#     deps = SearchDataclassForDI(
+#         todays_date=date_string, constraints=constraints, max_results=max_results)
+#     query = prompt.format(CONSTRAINTS_JSON=constraints)
+#     # Inject dependencies into the agent
+#     logging.info(f"Query: {query}")
+#     logging.info(f"Deps: {deps}")
 
-    # TODO: Add human in the loop breakpoints so thtat it has max iterations and doesnt get too expensive.
-    result = await search_agent.run(
-        query,
-        deps=deps,
-        usage_limits=UsageLimits(request_limit=10, total_tokens_limit=10000),
-        model_settings=ModelSettings(max_tokens=10000))
-    logging.info(f"Result: {result}")
-    return result
+#     result = await search_agent.run(
+#         query,
+#         deps=deps,
+#         usage_limits=UsageLimits(request_limit=10, total_tokens_limit=10000),
+#         model_settings=ModelSettings(max_tokens=10000))
+#     logging.info(f"Result: {result}")
+#     return result
 
 # Langgraph Section
 # Node
@@ -227,13 +228,13 @@ async def do_search(constraints: str, max_results: int):
 # meal_planner_workflow.add_edge(START, "assistant")
 # End of Langgraph Section
 
-# streamlit app
-def main3():
-    st.title("Pydantic AI Web Scraper")
-    query = st.text_input("Enter your query")
-    if st.button("Search"):
-        result = asyncio.run(do_search(query, max_results=5))
-        st.write(result)
+# # streamlit app
+# def main3():
+#     st.title("Pydantic AI Web Scraper")
+#     query = st.text_input("Enter your query")
+#     if st.button("Search"):
+#         result = asyncio.run(do_search(query, max_results=5))
+#         st.write(result)
 
 
 def main2():
@@ -474,7 +475,6 @@ def main():
         st.json(constraints_json)  # Display the constraints for debugging
         # result = asyncio.run(do_search(constraints_json, max_results=2))
         # st.success("Meal plan generated successfully!")
-        # # TODO parse the results and display them to the user formatted pretty so that the user can use a tab controller to open each day, and then a tree view to drill down into each meal and investigate all the details, macros, micronutrients, cost, etc for the meal and ingredients breakdowns.
         # if result and result.data:
         #     weekly_meal_plan = result.data
         # else:
@@ -539,7 +539,6 @@ class MealPlannerWorkflow:
         )
 
         # Filter recipes based on other constraints
-        # TODO: Check all the other constraints that need to be filtered out like dietary restrictions, calories, protein, lipids, etc.
         filtered_recipes: list[ValidateAndAdaptRecipeResult] = []
         for recipe in recipes:
             # Skip recipes with avoided ingredients
@@ -554,21 +553,44 @@ class MealPlannerWorkflow:
                     if max_time and recipe.cooking_time_minutes > max_time:
                         continue
 
+            if recipe.dietary_info.contains_meat and constraints.dietary_restrictions.meat == 'no':
+                continue
+            if recipe.dietary_info.contains_dairy and constraints.dietary_restrictions.dairy == 'no':
+                continue
+            if recipe.dietary_info.contains_soy and constraints.dietary_restrictions.soy == 'no':
+                continue
+            if recipe.dietary_info.contains_nuts and constraints.dietary_restrictions.nuts == 'no':
+                continue
+            if recipe.dietary_info.contains_shellfish and constraints.dietary_restrictions.shellfish == 'no':
+                continue
+            if recipe.dietary_info.contains_fish and constraints.dietary_restrictions.fish == 'no':
+                continue
+            if recipe.dietary_info.contains_eggs and constraints.dietary_restrictions.eggs == 'no':
+                continue
+
             filtered_recipes.append(recipe)
 
         return filtered_recipes
 
-    async def generate_meal_plan(self, meal_plan_constraints: mpc.ConstraintsType, recipe_constraints: mpc.ConstraintsType, day_constraints: mpc.ConstraintsType) -> WeeklyMealPlan:
+    async def generate_meal_plan(
+            self,
+            meal_plan_constraints: mpc.MealPlanConstraints,
+            recipe_constraints: mpc.RecipeConstraints,
+            day_constraints: mpc.DayConstraints
+    ) -> WeeklyMealPlan:
         """Generate a complete meal plan using recipe search and constraints."""
         # Get suitable recipes
         recipes = await self.find_suitable_recipes(recipe_constraints)
+        day_plans: list[DayMeals] = []
 
-        day_plan = self.build_day_plan(day_constraints, recipes)
+        day_plan = await self.build_day_plan(day_constraints, recipes, day_plans)
+        day_plans.append(day_plan)
         if not self.check_day_plan_against_constraints(day_plan, day_constraints):
             raise ValueError(
                 "Day plan does not satisfy day constraints, needs to be run again")
 
-        week_plan = self.build_week_plan(meal_plan_constraints, [day_plan])
+        week_plan = self.build_week_plan(
+            meal_plan_constraints, day_constraints, recipes)
         if not self.check_week_plan_against_constraints(week_plan, meal_plan_constraints):
             raise ValueError(
                 "Week plan does not satisfy week constraints, needs to be run again")
@@ -577,11 +599,13 @@ class MealPlannerWorkflow:
         self.export_week_plan(week_plan)
         return week_plan
 
-    def build_day_plan(self, day_constraints: mpc.DayConstraints, recipes: list[ValidateAndAdaptRecipeResult], existing_day_plans: list[DayMeals]) -> DayMeals:
+    async def build_day_plan(self, day_constraints: mpc.DayConstraints, recipes: list[ValidateAndAdaptRecipeResult], existing_day_plans: list[DayMeals]) -> DayMeals:
         """Build a day's meal plan that satisfies the given constraints."""
         # Initialize meals for the day
         day_plan = DayMeals()
+        # create shallow copies of the lists so we can modify the list not the underlying items
         recipes = [*recipes]
+        existing_day_plans = [*existing_day_plans]
         # Calculate target calories per meal based on daily total
         daily_calories_max = day_constraints.calories.max
         remaining_calories = daily_calories_max
@@ -650,12 +674,11 @@ class MealPlannerWorkflow:
         random.shuffle(recipes)
 
         recipes_used_counter = {r.url: 0 for r in recipes}
-        # TODO: this needs to vary from the recipes used in the meals in the existing_day_plans to ensure variety.
 
-        def assign_recipes_to_meals(proportions: dict[str, float], call_depth: int):
+        async def assign_recipes_to_meals(proportions: dict[str, float], call_depth: int):
             for k in order_of_exec:
                 remaining_calories = daily_calories_max - sum(
-                    r.calories
+                    r.calories_per_serving
                     for meal in [
                         day_plan.breakfast,
                         day_plan.lunch,
@@ -694,7 +717,7 @@ class MealPlannerWorkflow:
                             proportions_sum = sum(proportions_units.values())
                             proportions = {k: p/proportions_sum for k,
                                            p in proportions_units.items()}
-                    assign_recipes_to_meals(
+                    await assign_recipes_to_meals(
                         proportions, call_depth=call_depth+1)
                     raise ValueError(
                         f"No suitable recipes found for {k} with calories range {calories_range} from {len(suitable_recipes)} recipes available for {k}.\n May have gone too heavy on earlier meals for this day, algorithm should try to fix itself and rerun the days by reducing previous meals calories multipliers.")
@@ -704,33 +727,20 @@ class MealPlannerWorkflow:
                 # choose and use a recipe for today, do not use the same recipe twice in one day unless when looking at meal_plan_constraints we have a variety set to # recipes <= 7
                 chosen_recipe = random.choice(recipes_by_calories)
                 meals: list[Meal] = getattr(day_plan, k)
-                # TODO: Convert the recipe to a meal
-                meal = Meal(
-                    name=chosen_recipe.title,
-                    ingredients=chosen_recipe.ingredients,
-                    instructions=chosen_recipe.instructions,
-                    time=chosen_recipe.cooking_time_minutes,
-                    cost=chosen_recipe.cost_gbp,
-                    calories=chosen_recipe.calories_per_serving,
-                    servings=0.75 * proportions[k],
-                    macros=chosen_recipe.macros,
-                    micronutrients=chosen_recipe.micros,
-                    recipe=chosen_recipe
-                )
+                meal = await self.convert_recipe_to_meal(chosen_recipe)
                 meals.append(meal)
                 recipes_used_counter[chosen_recipe.url] += 1
                 if k in ['breakfast', 'lunch', 'dinner']:
                     recipes.remove(chosen_recipe)
 
-        assign_recipes_to_meals(proportions, call_depth=0)
+        await assign_recipes_to_meals(proportions, call_depth=0)
 
         return day_plan
 
     def build_week_plan(self,
                         week_constraints: mpc.MealPlanConstraints,
                         day_constraints: mpc.DayConstraints,
-                        recipes: list[ValidateAndAdaptRecipeResult],
-                        day_plans: list[DayMeals]) -> WeeklyMealPlan:
+                        recipes: list[ValidateAndAdaptRecipeResult]) -> WeeklyMealPlan:
         """Build a week's meal plan from daily plans."""
         # depending on variety constraints, we should calculate the number of different days to build and then assign them out between the 7 days. i.e. if variety of 3 differnet day plans, then we have dayA, dayB, dayC, dayA, dayB, dayC, dayA
         recipes_spans_days = week_constraints.variety_repitition.total_recipes_per_week / \
@@ -973,7 +983,7 @@ class MealPlannerWorkflow:
         self,
         recipe_string: str,
         image: Optional[bytes] = None
-    ) -> ValidateAndAdaptRecipeResult:
+    ) -> Optional[ValidateAndAdaptRecipeResult]:
         """Add a recipe from natural language description with interactive follow-up questions."""
 
         llm = get_langchain_llm(use_ollama=False)
@@ -1028,12 +1038,13 @@ class MealPlannerWorkflow:
                     # All required fields are present
                     recipe = ExtractRecipeDataSchemaPropertiesPydantic(
                         **recipe_data)
-                    recipe.source = "user_input"
                     recipe.url = f"user_recipe_{
                         datetime.datetime.now().isoformat()}"
-                    if image:
-                        recipe.image = image
-
+                    recipe = ExtractRecipeDataSchemaPropertiesWithSourcePydantic(
+                        **recipe.model_dump(),
+                        source="user_input",
+                        image=image
+                    )
                     # Save to database and index
                     self.recipe_searcher._save_valid_recipe(recipe)
                     recipe_text = self.recipe_searcher._recipe_to_text(recipe)
@@ -1041,7 +1052,10 @@ class MealPlannerWorkflow:
                         [recipe_text],
                         metadatas=[recipe.model_dump()]
                     )
-                    return recipe
+                    return await self.recipe_searcher._validate_and_adapt_recipe(
+                        recipe=recipe,
+                        constraints=None
+                    )
 
                 # Gather missing information through interactive prompts
                 print(
@@ -1274,6 +1288,12 @@ class MealPlannerWorkflow:
                 used_recipes.add(recipe.url)
         return used_recipes
 
+    async def extract_recipe_from_image(self, image: bytes) -> ValidateAndAdaptRecipeResult:
+        """Extract recipe data from an image."""
+        # TODO: use a vision model to extract the recipe data from the image in the structured format from the recipe_searcher.schema_extract_recipe_data schema using the langchain.chains.create_extraction_chain function and a langchain graph with a node hosting the vision model to extract all ingredients and amounts, a node hosting the recipe_searcher.schema_extract_recipe_data schema to validate the extracted data, and a node hosting the recipe_searcher.schema_adapt_recipe_data schema to adapt the extracted data to the schema, a node to save the recipe data to the database, and a node to return the recipe data, a node to add the recipe data to the FAISS index, a node to ask the Human in the loop if they are happy with the recipe data, and a node to save the recipe data to the database if they are happy with it.
+        # TODO: the above code should be in this function that returns the ValidateAndAdaptRecipeResult
+        ...
+
     async def scrape_product(self, product_name: str, supermarket_name: str) -> SupermarketProduct:
         """
         Scrape product details from a supermarket website and store in database.
@@ -1469,6 +1489,270 @@ class MealPlannerWorkflow:
         - Carbs: {product.nutritional_info.carbs_g}g
         - Fat: {product.nutritional_info.fat_g}g
         """
+
+    async def convert_recipe_to_meal(
+        self,
+        recipe: ValidateAndAdaptRecipeResult,
+        servings: Optional[int] = None
+    ) -> Meal:
+        """Convert a recipe to a meal with cost calculations."""
+
+        # Initialize cost tracking
+        total_cost = 0.0
+        ingredient_costs: Dict[str, float] = {}
+
+        # Use provided servings or recipe default
+        servings = servings or recipe.servings
+
+        # Extract ingredients with quantities
+        ingredients_with_quantities = self._parse_ingredients(
+            recipe.ingredients)
+
+        # Search and calculate costs for each ingredient
+        for ingredient, quantity in ingredients_with_quantities.items():
+            try:
+                # Search for ingredient in product database first
+                product = await self._find_product_in_db(ingredient)
+
+                if not product:
+                    # If not in database, search and scrape from supermarket
+                    product = await self.scrape_product(
+                        product_name=ingredient,
+                        supermarket_name="tesco"  # Default to Tesco, could be configurable
+                    )
+
+                # Calculate cost based on quantity needed
+                ingredient_cost = self._calculate_ingredient_cost(
+                    product=product,
+                    required_quantity=quantity
+                )
+
+                ingredient_costs[ingredient] = ingredient_cost
+                total_cost += ingredient_cost
+
+            except Exception as e:
+                logging.warning(f"Could not get cost for {ingredient}: {e}")
+                ingredient_costs[ingredient] = 0.0
+
+        # Create the meal object
+        meal = Meal(
+            recipe_name=recipe.title,
+            recipe_url=recipe.url,
+            servings=servings,
+            total_cost_gbp=total_cost,
+            cost_per_serving_gbp=total_cost / servings if servings else 0,
+            ingredient_costs_gbp=ingredient_costs,
+            calories_per_serving=recipe.calories_per_serving,
+            protein_g=recipe.macros.protein,
+            carbs_g=recipe.macros.carbs,
+            fat_g=recipe.macros.fat,
+            cooking_time_minutes=recipe.cooking_time_minutes,
+            ingredients=recipe.ingredients,
+            instructions=recipe.instructions,
+            dietary_info=DietaryRestrictions(
+                gluten='none' if recipe.dietary_info.gluten_free else 'normal',
+                dairy='none' if recipe.dietary_info.contains_dairy else 'normal',
+                soy='none' if recipe.dietary_info.contains_soy else 'normal',
+                nuts='none' if recipe.dietary_info.contains_nuts else 'normal',
+                shellfish='none' if recipe.dietary_info.contains_shellfish else 'normal',
+                fish='none' if recipe.dietary_info.contains_fish else 'normal',
+                eggs='none' if recipe.dietary_info.contains_eggs else 'normal',
+                meat='none' if recipe.dietary_info.contains_meat else 'normal',
+                vegetarian='yes' if recipe.dietary_info.vegetarian else 'no',
+                vegan='yes' if recipe.dietary_info.vegan else 'no',
+                pescetarian='yes' if recipe.dietary_info.contains_fish and not recipe.dietary_info.contains_meat else 'no',
+                carnivore='yes' if recipe.dietary_info.contains_meat else 'no',
+                suitable_for_diet=recipe.dietary_info.suitable_for_diet
+            ),
+            nutritional_info=NutritionalInfo(
+                calories_per_100g=recipe.calories_per_serving,
+                protein_g=recipe.macros.protein,
+                carbs_g=recipe.macros.carbs,
+                fat_g=recipe.macros.fat,
+                fiber_g=recipe.macros.fiber,
+                sugar_g=recipe.macros.sugar,
+                salt_g=recipe.macros.salt,
+                vitamins=ProductVitamins(
+                    vitamin_a_mcg=recipe.micros.vitamin_a,
+                    vitamin_c_mg=recipe.micros.vitamin_c,
+                    vitamin_d_mcg=recipe.micros.vitamin_d,
+                    vitamin_e_mg=recipe.micros.vitamin_e,
+                    vitamin_k_mcg=recipe.micros.vitamin_k,
+                    thiamin_mg=recipe.micros.thiamin,
+                    riboflavin_mg=recipe.micros.riboflavin,
+                    niacin_mg=recipe.micros.niacin,
+                    vitamin_b6_mg=recipe.micros.vitamin_b6,
+                    folate_mcg=recipe.micros.folate,
+                    vitamin_b12_mcg=recipe.micros.vitamin_b12
+                ),
+                minerals=ProductMinerals(
+                    calcium_mg=recipe.micros.calcium,
+                    iron_mg=recipe.micros.iron,
+                    magnesium_mg=recipe.micros.magnesium,
+                    phosphorus_mg=recipe.micros.phosphorus,
+                    potassium_mg=recipe.micros.potassium,
+                    sodium_mg=recipe.micros.sodium,
+                    zinc_mg=recipe.micros.zinc,
+                    selenium_mcg=recipe.micros.selenium
+                )
+            )
+        )
+
+        return meal
+
+    async def delete_recipe(self, recipe_url: str):
+        """Delete a recipe from the database and the FAISS index."""
+        self.recipe_searcher.persistent_cursor.execute(
+            "DELETE FROM recipes WHERE url = ?", (recipe_url,)
+        )
+        self.recipe_searcher.persistent_conn.commit()
+
+        # Delete from FAISS index
+        warnings.warn(f"Deleting recipe {recipe_url} from FAISS index")
+        results = self.recipe_searcher.recipe_store.similarity_search(
+            recipe_url,
+            k=1
+        )
+        self.recipe_searcher.recipe_store.delete(results[0].metadata)
+
+    def _parse_ingredients(self, ingredients: list[str]) -> Dict[str, float]:
+        """Parse ingredients list to extract quantities and units."""
+        # Initialize LLM for ingredient parsing
+        llm = get_langchain_llm(use_ollama=False)
+
+        # Create extraction chain for ingredient parsing
+        ingredient_schema = {
+            "properties": {
+                "ingredient": {"type": "string"},
+                "quantity": {"type": "number"},
+                "unit": {"type": "string"}
+            }
+        }
+
+        extraction_chain = create_extraction_chain(
+            schema=ingredient_schema,
+            llm=llm
+        )
+
+        parsed_ingredients = {}
+        for ingredient in ingredients:
+            try:
+                # Extract quantity information
+                result = extraction_chain.invoke({"input": ingredient})
+                if result and result.get('text'):
+                    data = result['text'][0]
+                    # Convert to standard units (e.g., grams, ml)
+                    quantity = self._standardize_quantity(
+                        data['quantity'],
+                        data['unit']
+                    )
+                    parsed_ingredients[data['ingredient']] = quantity
+                else:
+                    # If parsing fails, store ingredient without quantity
+                    parsed_ingredients[ingredient] = 0.0
+            except Exception as e:
+                logging.warning(f"Error parsing ingredient {ingredient}: {e}")
+                parsed_ingredients[ingredient] = 0.0
+
+        return parsed_ingredients
+
+    def _standardize_quantity(self, quantity: float, unit: str) -> float:
+        """Convert quantities to standard units (g/ml)."""
+        # Conversion factors
+        conversions = {
+            # Weight
+            'kg': 1000,
+            'g': 1,
+            'mg': 0.001,
+            'oz': 28.35,
+            'lb': 453.592,
+            # Volume
+            'l': 1000,
+            'ml': 1,
+            'cup': 240,
+            'tbsp': 15,
+            'tsp': 5,
+            'fl oz': 29.574
+        }
+
+        unit = unit.lower().strip()
+        if unit in conversions:
+            return quantity * conversions[unit]
+        return quantity
+
+    async def _find_product_in_db(self, ingredient: str) -> Optional[SupermarketProduct]:
+        """Search for ingredient in product database."""
+        try:
+            # Search FAISS index first
+            results = self.recipe_searcher.recipe_store.similarity_search(
+                ingredient,
+                k=1
+            )
+
+            if results:
+                product_data = results[0].metadata
+                return SupermarketProduct(**product_data)
+
+        except Exception as e:
+            logging.warning(f"Error searching product database: {e}")
+
+        return None
+
+    def _calculate_ingredient_cost(
+        self,
+        product: SupermarketProduct,
+        required_quantity: float
+    ) -> float:
+        """Calculate cost of ingredient based on required quantity."""
+        # Parse price per unit
+        try:
+            unit_price = self._parse_price_per_unit(product.price_per_unit)
+
+            # Convert required quantity to same unit as price
+            converted_quantity = required_quantity / 1000  # Convert g to kg or ml to l
+
+            return unit_price * converted_quantity
+        except:
+            # Fallback to simple division by package size if available
+            # Assume 100g/ml portions
+            return (required_quantity / 100) * product.price
+
+    def _parse_price_per_unit(self, price_per_unit: str) -> float:
+        """Parse price per unit string (e.g., '£2.50/kg')."""
+        try:
+            # Extract numeric value
+            price = float(re.search(r'£?(\d+\.?\d*)', price_per_unit).group(1))
+
+            # Convert to per gram/ml if needed
+            if '/kg' in price_per_unit or '/l' in price_per_unit:
+                return price
+            elif '/100g' in price_per_unit or '/100ml' in price_per_unit:
+                return price * 10
+
+            return price
+        except:
+            raise ValueError(f"Could not parse price per unit: {
+                             price_per_unit}")
+
+
+async def test_add_my_own_recipe_from_natural_language():
+    recipe_text = """
+    Make spaghetti with tomato sauce.
+    Cook pasta, add sauce with garlic and basil.
+    Takes about 20 minutes.
+    """
+
+    try:
+        workflow = MealPlannerWorkflow()
+        recipe = await workflow.add_my_own_recipe_from_natural_language(recipe_text)
+        print(recipe)
+        workflow.delete_recipe(recipe.url)
+    except ValueError as e:
+        print(f"Error: {e}")
+
+
+def run_tests():
+    asyncio.run(test_add_my_own_recipe_from_natural_language())
 
 
 if __name__ == "__main__":

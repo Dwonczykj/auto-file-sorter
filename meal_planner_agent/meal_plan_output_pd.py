@@ -2,6 +2,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from dataclasses import dataclass
 import meal_planner_agent.meal_plan_constraints_pd as mpc
+from meal_planner_agent.meal_planner_workflow_types import Meal
 from meal_planner_agent.recipe_search_types import ValidateAndAdaptRecipeResult
 
 
@@ -29,18 +30,18 @@ class Ingredient:
     macros: MacroNutrients
 
 
-@dataclass
-class Meal:
-    name: str
-    ingredients: List[Ingredient]
-    instructions: str
-    time: int  # in minutes
-    cost: float  # in GBP
-    servings: float
-    calories: float
-    macros: MacroNutrients
-    micronutrients: MicroNutrients
-    recipe: ValidateAndAdaptRecipeResult
+# @dataclass
+# class Meal:
+#     name: str
+#     ingredients: List[Ingredient]
+#     instructions: str
+#     time: int  # in minutes
+#     cost: float  # in GBP
+#     servings: float
+#     calories: float
+#     macros: MacroNutrients
+#     micronutrients: MicroNutrients
+#     recipe: ValidateAndAdaptRecipeResult
 
 
 @dataclass

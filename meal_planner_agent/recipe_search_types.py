@@ -111,6 +111,9 @@ class ExtractRecipeDataSchemaMacros(TypedDict):
     protein: int | _SchemaTypeVal
     carbs: int | _SchemaTypeVal
     fat: int | _SchemaTypeVal
+    fiber: int | _SchemaTypeVal
+    sugar: int | _SchemaTypeVal
+    salt: int | _SchemaTypeVal
 
 
 class ExtractRecipeDataSchemaMicros(TypedDict):
@@ -123,18 +126,43 @@ class ExtractRecipeDataSchemaMicros(TypedDict):
     iron: int | _SchemaTypeVal
     magnesium: int | _SchemaTypeVal
     phosphorus: int | _SchemaTypeVal
+    potassium: int | _SchemaTypeVal
+    sodium: int | _SchemaTypeVal
+    zinc: int | _SchemaTypeVal
+    selenium: int | _SchemaTypeVal
+    thiamin: int | _SchemaTypeVal
+    riboflavin: int | _SchemaTypeVal
+    niacin: int | _SchemaTypeVal
+    vitamin_b6: int | _SchemaTypeVal
+    folate: int | _SchemaTypeVal
+    vitamin_b12: int | _SchemaTypeVal
 
 
 class ExtractRecipeDataSchemaDietaryInfo(TypedDict):
     vegetarian: bool | _SchemaTypeVal
     vegan: bool | _SchemaTypeVal
     gluten_free: bool | _SchemaTypeVal
+    contains_meat: bool | _SchemaTypeVal
+    contains_dairy: bool | _SchemaTypeVal
+    contains_nuts: bool | _SchemaTypeVal
+    contains_soy: bool | _SchemaTypeVal
+    contains_gluten: bool | _SchemaTypeVal
+    contains_eggs: bool | _SchemaTypeVal
+    contains_shellfish: bool | _SchemaTypeVal
+    contains_peanuts: bool | _SchemaTypeVal
+    contains_tree_nuts: bool | _SchemaTypeVal
+    contains_wheat: bool | _SchemaTypeVal
+    contains_fish: bool | _SchemaTypeVal
+    suitable_for_diet: list[str]
 
 
 class ExtractRecipeDataSchemaMacrosPydantic(BaseModel):
     protein: int
     carbs: int
     fat: int
+    fiber: int
+    sugar: int
+    salt: int
 
 
 class ExtractRecipeDataSchemaMicrosPydantic(BaseModel):
@@ -147,6 +175,16 @@ class ExtractRecipeDataSchemaMicrosPydantic(BaseModel):
     iron: int
     magnesium: int
     phosphorus: int
+    potassium: int
+    sodium: int
+    zinc: int
+    selenium: int
+    thiamin: int
+    riboflavin: int
+    niacin: int
+    vitamin_b6: int
+    folate: int
+    vitamin_b12: int
 
 
 class ExtractRecipeDataSchemaDietaryInfoPydantic(BaseModel):
@@ -164,6 +202,7 @@ class ExtractRecipeDataSchemaDietaryInfoPydantic(BaseModel):
     contains_tree_nuts: bool
     contains_wheat: bool
     contains_fish: bool
+    suitable_for_diet: list[str]
 
 
 class ExtractRecipeDataSchemaPropertiesPydantic(BaseModel):
@@ -189,9 +228,14 @@ class ExtractRecipeDataSchemaPropertiesPydantic(BaseModel):
     content: str
     url: str
     last_updated: str
+    image: bytes | None
 
 
-class ValidateAndAdaptRecipeResult(ExtractRecipeDataSchemaPropertiesPydantic):
+class ExtractRecipeDataSchemaPropertiesWithSourcePydantic(ExtractRecipeDataSchemaPropertiesPydantic):
+    source: Literal['user_input', 'web_scrape']
+
+
+class ValidateAndAdaptRecipeResult(ExtractRecipeDataSchemaPropertiesWithSourcePydantic):
     original_recipe_url: str
     is_modified: bool
     user_approved: bool

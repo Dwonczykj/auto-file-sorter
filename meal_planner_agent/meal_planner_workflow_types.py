@@ -1,6 +1,8 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime
+
+from meal_planner_agent.meal_plan_constraints_pd import DietaryRestrictions
 
 
 class ProductVitamins(BaseModel):
@@ -42,11 +44,11 @@ class NutritionalInfo(BaseModel):
     sugar_g: float = Field(0.0, description="Sugar content in grams")
     salt_g: float = Field(0.0, description="Salt content in grams")
     vitamins: Optional[ProductVitamins] = Field(
-        default_factory=ProductVitamins,
+        default_factory=lambda: None,
         description="Detailed vitamin content"
     )
     minerals: Optional[ProductMinerals] = Field(
-        default_factory=ProductMinerals,
+        default_factory=lambda: None,
         description="Detailed mineral content"
     )
 
@@ -93,5 +95,66 @@ class SupermarketProduct(BaseModel):
                     "sugar_g": 4.7,
                     "salt_g": 0.1
                 }
+            }
+        }
+
+
+class Meal(BaseModel):
+    """A meal with recipe details and cost information."""
+    recipe_name: str = Field(..., description="Name of the recipe")
+    recipe_url: str = Field(..., description="URL of the recipe")
+    servings: int = Field(..., description="Number of servings")
+    total_cost_gbp: float = Field(..., description="Total cost in GBP")
+    cost_per_serving_gbp: float = Field(...,
+                                        description="Cost per serving in GBP")
+    ingredient_costs_gbp: Dict[str, float] = Field(
+        ..., description="Cost breakdown by ingredient")
+    calories_per_serving: int = Field(..., description="Calories per serving")
+    protein_g: float = Field(..., description="Protein content in grams")
+    carbs_g: float = Field(..., description="Carbohydrate content in grams")
+    fat_g: float = Field(..., description="Fat content in grams")
+    nutritional_info: NutritionalInfo = Field(
+        ..., description="Detailed nutritional information")
+    cooking_time_minutes: int = Field(...,
+                                      description="Cooking time in minutes")
+    ingredients: List[str] = Field(..., description="List of ingredients")
+    instructions: List[str] = Field(..., description="Cooking instructions")
+    dietary_info: DietaryRestrictions
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "recipe_name": "Spaghetti Carbonara",
+                "recipe_url": "https://example.com/recipes/carbonara",
+                "servings": 4,
+                "total_cost_gbp": 12.50,
+                "cost_per_serving_gbp": 3.125,
+                "ingredient_costs_gbp": {
+                    "spaghetti": 1.50,
+                    "eggs": 1.00,
+                    "pecorino cheese": 3.00,
+                    "pancetta": 5.00,
+                    "black pepper": 0.10
+                },
+                "calories_per_serving": 650,
+                "protein_g": 25.0,
+                "carbs_g": 70.0,
+                "fat_g": 30.0,
+                "cooking_time_minutes": 20,
+                "ingredients": [
+                    "400g spaghetti",
+                    "4 large eggs",
+                    "100g pecorino cheese",
+                    "150g pancetta",
+                    "2 tsp black pepper"
+                ],
+                "instructions": [
+                    "Cook pasta in salted water",
+                    "Fry pancetta until crispy",
+                    "Mix eggs and cheese",
+                    "Combine all ingredients",
+                    "Season with black pepper"
+                ],
+                "dietary_info": ["contains dairy", "contains eggs", "contains pork"]
             }
         }

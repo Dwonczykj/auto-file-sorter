@@ -204,7 +204,10 @@ class RecipeSearch:
                     "properties": {
                         "protein": {"type": "integer"},
                         "carbs": {"type": "integer"},
-                        "fat": {"type": "integer"}
+                        "fat": {"type": "integer"},
+                        "fiber": {"type": "integer"},
+                        "sugar": {"type": "integer"},
+                        "salt": {"type": "integer"}
                     }
                 },
                 "micros": {
@@ -218,7 +221,17 @@ class RecipeSearch:
                         "calcium": {"type": "integer"},
                         "iron": {"type": "integer"},
                         "magnesium": {"type": "integer"},
-                        "phosphorus": {"type": "integer"}
+                        "phosphorus": {"type": "integer"},
+                        "thiamin": {"type": "integer"},
+                        "riboflavin": {"type": "integer"},
+                        "niacin": {"type": "integer"},
+                        "vitamin_b6": {"type": "integer"},
+                        "folate": {"type": "integer"},
+                        "vitamin_b12": {"type": "integer"},
+                        "potassium": {"type": "integer"},
+                        "sodium": {"type": "integer"},
+                        "zinc": {"type": "integer"},
+                        "selenium": {"type": "integer"}
                     }
                 },
                 "dietary_info": {
@@ -226,7 +239,19 @@ class RecipeSearch:
                     "properties": {
                         "vegetarian": {"type": "boolean"},
                         "vegan": {"type": "boolean"},
-                        "gluten_free": {"type": "boolean"}
+                        "gluten_free": {"type": "boolean"},
+                        "contains_meat": {"type": "boolean"},
+                        "contains_dairy": {"type": "boolean"},
+                        "contains_nuts": {"type": "boolean"},
+                        "contains_soy": {"type": "boolean"},
+                        "contains_gluten": {"type": "boolean"},
+                        "contains_eggs": {"type": "boolean"},
+                        "contains_shellfish": {"type": "boolean"},
+                        "contains_peanuts": {"type": "boolean"},
+                        "contains_tree_nuts": {"type": "boolean"},
+                        "contains_wheat": {"type": "boolean"},
+                        "contains_fish": {"type": "boolean"},
+                        "suitable_for_diet": {"type": "array", "items": {"type": "string"}}
                     }
                 }
             },
@@ -1611,17 +1636,21 @@ class RecipeSearch:
             # Analyze content for recipe
             recipe_data, content = await self._extract_recipe_data(content, url)
 
-            if recipe_data and recipe_data.is_recipe:
-                self._save_valid_recipe(recipe_data)
-                self._update_processing_status(url, 'valid_recipe')
-                return recipe_data
-            else:
-                self._update_processing_status(url, 'invalid_recipe')
-                return None
+            return self.update_and_save_processed_recipe_url(url, recipe_data)
 
         except Exception as e:
             logging.error(f"Error processing URL {url}: {e}")
             self._update_processing_status(url, 'error')
+            return None
+
+    def update_and_save_processed_recipe_url(self, url: str, recipe_data: ExtractRecipeDataSchemaPropertiesPydantic | None):
+        """Update the processing status for a URL and save the recipe data."""
+        if recipe_data and recipe_data.is_recipe:
+            self._save_valid_recipe(recipe_data)
+            self._update_processing_status(url, 'valid_recipe')
+            return recipe_data
+        else:
+            self._update_processing_status(url, 'invalid_recipe')
             return None
 
     def _update_processing_status(self, url: str, status: str):

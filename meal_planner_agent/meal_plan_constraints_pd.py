@@ -110,6 +110,10 @@ class DietaryRestrictions(BaseModel):
     vegan: YesNoEnum
     pescetarian: YesNoEnum
     carnivore: YesNoEnum
+    suitable_for_diet: List[str] = Field(
+        default_factory=list,
+        description="A list of diets that the meal is suitable for"
+    )
 
     def to_label(self) -> str:
         return ", ".join([k for k, v in self.model_dump().items() if v == "yes"])

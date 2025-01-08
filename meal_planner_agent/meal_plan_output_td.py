@@ -1,5 +1,7 @@
 from typing import TypedDict, List, Dict
 
+from meal_planner_agent.meal_planner_workflow_types import Meal
+
 
 class MacroNutrients(TypedDict):
     protein: float
@@ -22,15 +24,15 @@ class Ingredient(TypedDict):
     macros: MacroNutrients
 
 
-class Meal(TypedDict):
-    name: str
-    ingredients: List[Ingredient]
-    instructions: str
-    time: int  # in minutes
-    cost: float  # in GBP
-    servings: int
-    macros: MacroNutrients
-    micronutrients: MicroNutrients
+# class Meal(TypedDict):
+#     name: str
+#     ingredients: List[Ingredient]
+#     instructions: str
+#     time: int  # in minutes
+#     cost: float  # in GBP
+#     servings: int
+#     macros: MacroNutrients
+#     micronutrients: MicroNutrients
 
 
 class DayMeals(TypedDict):
