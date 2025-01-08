@@ -1,6 +1,8 @@
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 from dataclasses import dataclass
+import meal_planner_agent.meal_plan_constraints_pd as mpc
+from meal_planner_agent.recipe_search_types import ValidateAndAdaptRecipeResult
 
 
 @dataclass
@@ -34,35 +36,41 @@ class Meal:
     instructions: str
     time: int  # in minutes
     cost: float  # in GBP
-    servings: int
+    servings: float
+    calories: float
     macros: MacroNutrients
     micronutrients: MicroNutrients
+    recipe: ValidateAndAdaptRecipeResult
 
 
 @dataclass
 class DayMeals:
-    breakfast: Meal
-    lunch: Meal
-    lunch_desert: Meal
-    snack: Meal
-    dinner: Meal
-    dinner_desert: Meal
+    breakfast: list[Meal] = []
+    lunch: list[Meal] = []
+    lunch_desert: list[Meal] = []
+    dinner: list[Meal] = []
+    dinner_desert: list[Meal] = []
+    snacks: list[Meal] = []
+
+    def keys(self):
+        return self.__dict__.keys()
+        # return ['breakfast', 'lunch', 'lunch_desert', 'dinner', 'dinner_desert', 'snacks']
 
 
 @dataclass
 class WeeklyMealPlan:
-    day_1: DayMeals
-    day_2: DayMeals
-    day_3: DayMeals
-    day_4: DayMeals
-    day_5: DayMeals
-    day_6: DayMeals
-    day_7: DayMeals
+    monday: DayMeals = DayMeals()
+    tuesday: DayMeals = DayMeals()
+    wednesday: DayMeals = DayMeals()
+    thursday: DayMeals = DayMeals()
+    friday: DayMeals = DayMeals()
+    saturday: DayMeals = DayMeals()
+    sunday: DayMeals = DayMeals()
 
 
 # Example usage
 mock_example_meal_plan = WeeklyMealPlan(
-    day_1=DayMeals(
+    monday=DayMeals(
         breakfast=Meal(
             name="Oatmeal",
             ingredients=[

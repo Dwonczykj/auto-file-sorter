@@ -5,7 +5,6 @@
         "max": 100,
         "min": 30
     },
-    "left_overs": "yes",
     "variety_repitition": {
         "total_recipes_per_week": 5,
         "total_ingredients_per_week": 30
