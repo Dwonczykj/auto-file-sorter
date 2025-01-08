@@ -184,6 +184,8 @@ class ExtractRecipeDataSchemaPropertiesPydantic(BaseModel):
     ingredients: list[str]
     instructions: list[str]
     dietary_info: ExtractRecipeDataSchemaDietaryInfoPydantic
+    cuisine_type: str
+    cooking_method: str
     content: str
     url: str
     last_updated: str
@@ -221,6 +223,8 @@ class ExtractRecipeDataSchemaProperties(TypedDict):
     instructions: list[str] | _SchemaTypeList
     dietary_info: ExtractRecipeDataSchemaDietaryInfo | _SchemaTypeObject[
         ExtractRecipeDataSchemaDietaryInfo]
+    cuisine_type: TSS
+    cooking_method: TSS
     content: TSS
 
 

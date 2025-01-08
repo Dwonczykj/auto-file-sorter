@@ -197,6 +197,8 @@ class RecipeSearch:
                 "instructions": {"type": "array", "items": {"type": "string"}},
                 "images": {"type": "array", "items": {"type": "string"}},
                 "content": {"type": "string"},
+                "cuisine_type": {"type": "string"},
+                "cooking_method": {"type": "string"},
                 "macros": {
                     "type": "object",
                     "properties": {

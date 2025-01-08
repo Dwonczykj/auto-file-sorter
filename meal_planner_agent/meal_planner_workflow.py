@@ -1,8 +1,10 @@
 # https://pub.towardsai.net/pydantic-ai-web-scraper-llama-3-3-python-powerful-ai-research-agent-6d634a9565fe
 # Pydantic AI Web Scraper with Ollama and Streamlit AI Chatbot
 
+from meal_planner_agent.meal_planner_workflow_types import SupermarketProduct
 import random
 import sqlite3
+from urllib.parse import urlparse
 import warnings
 from meal_planner_agent.load_constraints import load_meal_plan_constraints, load_recipe_constraints, load_day_constraints
 from recipe_search import RecipeSearch, ValidateAndAdaptRecipeResult, ExtractRecipeDataSchemaPropertiesPydantic
@@ -21,6 +23,7 @@ import langchain.document_transformers as lcdt
 import langchain.text_splitter as lcts
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import tiktoken
+from langchain.chains import create_extraction_chain
 from auto_file_sorter.logging.logging_config import configure_logging
 from meal_planner_agent.meal_plan_constraints_pd import DietaryRestrictions, MealPlanConstraints, MealSizeEnum
 import meal_planner_agent.meal_plan_constraints_pd as mpc
@@ -38,7 +41,7 @@ import logging
 import os
 import asyncio
 import datetime
-from typing import Any, Literal, Union, Optional
+from typing import Any, Dict, Literal, Union, Optional
 from dataclasses import dataclass
 from langgraph.graph import START
 from meal_planner_agent.prompt_templates import generate_meal_plan
@@ -691,7 +694,6 @@ class MealPlannerWorkflow:
                             proportions_sum = sum(proportions_units.values())
                             proportions = {k: p/proportions_sum for k,
                                            p in proportions_units.items()}
-                    # TODO: add recursive call to run the meal assignment for loop  i.e. for k in order_of_exec: onwards again but limiting to 2 recursions.
                     assign_recipes_to_meals(
                         proportions, call_depth=call_depth+1)
                     raise ValueError(
@@ -889,47 +891,233 @@ class MealPlannerWorkflow:
         else:
             return await self.recipe_searcher.process_and_adapt_recipe_from_url(url=recipe_url, constraints=constraints)
 
-    async def add_my_own_recipe_from_file(self, recipe_file: str) -> ValidateAndAdaptRecipeResult:
+    async def add_my_own_recipe_from_file(
+        self,
+        recipe_file: str,
+        constraints: Optional[mpc.ConstraintsType] = None
+    ) -> ValidateAndAdaptRecipeResult:
         """Add a recipe from a file to the database."""
-        # TODO: Work out what type of file it is from its extension and then parse it using langchain.document_loaders meanning we can process, pdfs, docx, txt, markdown, html, xlsx, csv, etc.
-        file_type = recipe_file.split('.')[-1]
-        if file_type == 'pdf':
-            loader = lcdl.PyPDFLoader(recipe_file)
-        elif file_type == 'docx':
-            loader = lcdl.Docx2txtLoader(recipe_file)
-        elif file_type == 'txt':
-            loader = lcdl.TextLoader(recipe_file)
-        elif file_type == 'markdown':
-            loader = lcdl.MHTMLLoader(recipe_file)
-        elif file_type == 'html':
-            loader = lcdl.BSHTMLLoader(recipe_file)
-        elif file_type == 'xlsx':
-            loader = lcdl.ExcelLoader(recipe_file)
-        elif file_type == 'csv':
-            loader = lcdl.CSVLoader(recipe_file)
-        elif file_type == 'json':
-            loader = lcdl.JSONLoader(recipe_file, jq_schema='')
-        elif file_type == 'xml':
-            loader = lcdl.UnstructuredXMLLoader(recipe_file)
-        else:
-            raise ValueError(f"Unsupported file type: {file_type}")
+        # Get the file extension and appropriate loader
+        file_type = recipe_file.split('.')[-1].lower()
+        loader = self._get_file_loader(file_type, recipe_file)
 
+        # Load and process the document
         docs = loader.load()
-        # TODO: run the file as an attachment to the agent with the schema to extract from the document using langchain.agents.run_structured_tool or langchain.chains.create_extraction_chain
-        # TODO: then validate and adapt the recipe
-        # TODO: then add the recipe to the database
-        # TODO: then return the recipe
+
+        # Create extraction chain for recipe data
+        # Use more capable model for extraction
+        llm = get_langchain_llm(use_ollama=False)
+        extraction_chain = create_extraction_chain(
+            schema=self.recipe_searcher.schema_extract_recipe_data,
+            llm=llm
+        )
+
+        # Extract recipe data from document
+        combined_text = "\n".join(doc.page_content for doc in docs)
+        extraction_result = await extraction_chain.ainvoke({"input": combined_text})
+
+        if not extraction_result or not extraction_result.get('text'):
+            raise ValueError("Could not extract recipe data from file")
+
+        # Convert to Pydantic model
+        recipe_data = ExtractRecipeDataSchemaPropertiesPydantic(
+            **extraction_result['text'][0])
+
+        # Validate and adapt recipe if needed
+        if constraints:
+            recipe = await self.recipe_searcher._validate_and_adapt_recipe(
+                recipe_data, constraints)
+            if not recipe:
+                raise ValueError(
+                    "Recipe does not meet constraints and cannot be adapted")
+        else:
+            recipe = ValidateAndAdaptRecipeResult(**recipe_data.model_dump())
+
+        # Save to database
+        self.recipe_searcher._save_valid_recipe(recipe)
+
+        # Update FAISS index
+        recipe_text = self.recipe_searcher._recipe_to_text(recipe)
+        self.recipe_searcher.recipe_store.add_texts(
+            [recipe_text],
+            metadatas=[recipe.model_dump()]
+        )
+
         return recipe
 
-    async def add_my_own_recipe_from_memory(self, recipe: ExtractRecipeDataSchemaPropertiesPydantic) -> ValidateAndAdaptRecipeResult:
+    def _get_file_loader(self, file_type: str, file_path: str) -> Any:
+        """Get appropriate document loader for file type."""
+        loaders = {
+            'pdf': lcdl.PyPDFLoader,
+            'docx': lcdl.Docx2txtLoader,
+            'txt': lcdl.TextLoader,
+            'md': lcdl.MarkdownLoader,
+            'html': lcdl.BSHTMLLoader,
+            'xlsx': lcdl.UnstructuredExcelLoader,
+            'csv': lcdl.CSVLoader,
+            'json': lambda p: lcdl.JSONLoader(p, jq_schema='.'),
+            'xml': lcdl.UnstructuredXMLLoader
+        }
+
+        if file_type not in loaders:
+            raise ValueError(f"Unsupported file type: {file_type}")
+
+        return loaders[file_type](file_path)
+
+    async def add_my_own_recipe_pre_formed(self, recipe: ExtractRecipeDataSchemaPropertiesPydantic) -> ValidateAndAdaptRecipeResult:
         """Add a recipe from a memory to the database."""
         recipe = self.find_recipe_from_memory(recipe)
         return recipe
 
-    async def add_my_own_recipe_from_natural_language(self, recipe_string: str) -> ValidateAndAdaptRecipeResult:
-        """Add a recipe from a memory to the database."""
-        # TODO: construct a prompt to extract the recipe from the natural language attempting to pull out the all the elements of the schema using the langchain.chains.create_extraction_chain, if there are any missing elements, then ask the user to fill them in with a sequence of input(question for field input to schema) prompts with questions, after all of the questions in the input sequence have been answered: rerun the chain. If all elements still are not present, rerun the loop unless we have rerun the loop 3 times after which time flag to the user that they have not provided enough information to extract the recipe and not sufficiently answered the follow up questions. They are missing information for ? where you should highlight the information that the recipe is missing.
-        return recipe
+    async def add_my_own_recipe_from_natural_language(
+        self,
+        recipe_string: str,
+        image: Optional[bytes] = None
+    ) -> ValidateAndAdaptRecipeResult:
+        """Add a recipe from natural language description with interactive follow-up questions."""
+
+        llm = get_langchain_llm(use_ollama=False)
+        max_attempts = 3
+        attempts = 0
+
+        # Initial extraction prompt
+        structure_prompt = PromptTemplate.from_template("""
+            You are a helpful assistant that extracts recipe information.
+            Please analyze this recipe description and extract all relevant information.
+            If information is missing, indicate what's missing so we can ask the user.
+            
+            Recipe description:
+            {recipe_text}
+            
+            Required information:
+            - Title
+            - Ingredients with quantities
+            - Step by step instructions
+            - Cooking time
+            - Servings
+            - Nutritional information (calories, protein, etc.)
+            - Cuisine type
+            - Dietary restrictions/tags
+        """)
+
+        while attempts < max_attempts:
+            # Extract recipe data
+            extraction_chain = create_extraction_chain(
+                schema=self.recipe_searcher.schema_extract_recipe_data,
+                llm=llm
+            )
+
+            # Get structured recipe text first
+            structured_result = await llm.ainvoke(
+                structure_prompt.format(recipe_text=recipe_string)
+            )
+
+            # Try to extract recipe data
+            extraction_result = await extraction_chain.ainvoke({
+                "input": structured_result.content
+            })
+
+            if not extraction_result or not extraction_result.get('text'):
+                print("Could not extract recipe data, gathering more information...")
+            else:
+                # Check for missing required fields
+                recipe_data = extraction_result['text'][0]
+                missing_fields = self._check_missing_recipe_fields(recipe_data)
+
+                if not missing_fields:
+                    # All required fields are present
+                    recipe = ExtractRecipeDataSchemaPropertiesPydantic(
+                        **recipe_data)
+                    recipe.source = "user_input"
+                    recipe.url = f"user_recipe_{
+                        datetime.datetime.now().isoformat()}"
+                    if image:
+                        recipe.image = image
+
+                    # Save to database and index
+                    self.recipe_searcher._save_valid_recipe(recipe)
+                    recipe_text = self.recipe_searcher._recipe_to_text(recipe)
+                    self.recipe_searcher.recipe_store.add_texts(
+                        [recipe_text],
+                        metadatas=[recipe.model_dump()]
+                    )
+                    return recipe
+
+                # Gather missing information through interactive prompts
+                print(
+                    "\nSome information is missing from your recipe. Please provide the following details:")
+
+                for field, question in missing_fields.items():
+                    user_input = input(f"{question}: ").strip()
+                    if field in ['ingredients', 'instructions']:
+                        # Split lists on newlines or commas
+                        recipe_data[field] = [
+                            item.strip()
+                            for item in user_input.replace('\n', ',').split(',')
+                            if item.strip()
+                        ]
+                    elif field in ['cooking_time_minutes', 'calories_per_serving']:
+                        try:
+                            recipe_data[field] = int(user_input)
+                        except ValueError:
+                            print(f"Invalid input for {
+                                  field}. Please enter a number.")
+                            continue
+                    else:
+                        recipe_data[field] = user_input
+
+                # Update recipe string with new information
+                recipe_string = self._format_recipe_with_new_info(recipe_data)
+
+            attempts += 1
+            if attempts == max_attempts:
+                missing = ', '.join(missing_fields.keys())
+                raise ValueError(
+                    f"Could not extract complete recipe after {
+                        max_attempts} attempts. "
+                    f"Missing information: {missing}"
+                )
+
+        raise ValueError("Failed to extract recipe data")
+
+    def _check_missing_recipe_fields(self, recipe_data: Dict) -> Dict[str, str]:
+        """Check which required fields are missing from the recipe data."""
+        required_fields = {
+            'title': 'What is the name of the recipe?',
+            'ingredients': 'Please list the ingredients with quantities (one per line)',
+            'instructions': 'Please provide the cooking instructions (one step per line)',
+            'cooking_time_minutes': 'How many minutes does it take to cook?',
+            'servings': 'How many servings does this recipe make?',
+            'calories_per_serving': 'How many calories per serving (approximate)?',
+            'cuisine_type': 'What type of cuisine is this recipe?',
+            'dietary_tags': 'Any dietary tags (e.g., vegetarian, gluten-free)?'
+        }
+
+        missing_fields = {}
+        for field, question in required_fields.items():
+            if field not in recipe_data or not recipe_data[field]:
+                missing_fields[field] = question
+
+        return missing_fields
+
+    def _format_recipe_with_new_info(self, recipe_data: Dict) -> str:
+        """Format recipe data back into a string for re-extraction."""
+        return f"""
+        Recipe: {recipe_data.get('title', '')}
+
+        Cuisine: {recipe_data.get('cuisine_type', '')}
+        Cooking Time: {recipe_data.get('cooking_time_minutes', '')} minutes
+        Servings: {recipe_data.get('servings', '')}
+        Calories per serving: {recipe_data.get('calories_per_serving', '')}
+
+        Ingredients:
+        {chr(10).join(recipe_data.get('ingredients', []))}
+
+        Instructions:
+        {chr(10).join(recipe_data.get('instructions', []))}
+
+        Dietary Tags: {', '.join(recipe_data.get('dietary_tags', []))}
+        """
 
     def _calculate_recipe_suitability(self, recipe: ValidateAndAdaptRecipeResult, constraints: mpc.ConstraintsType) -> float:
         """Calculate how well a recipe matches the given constraints."""
@@ -1085,6 +1273,202 @@ class MealPlannerWorkflow:
             for recipe in meals:
                 used_recipes.add(recipe.url)
         return used_recipes
+
+    async def scrape_product(self, product_name: str, supermarket_name: str) -> SupermarketProduct:
+        """
+        Scrape product details from a supermarket website and store in database.
+        """
+        # Initialize search tool and extraction chain
+        llm = get_langchain_llm(use_ollama=False)
+
+        # Define product extraction schema
+        # TODO: Type Annotate this schema to ensure it matches the SupermarketProduct Pydantic model
+        product_schema = {
+            "properties": {
+                "product_name": {"type": "string"},
+                "price": {"type": "number"},
+                "price_per_unit": {"type": "string"},
+                "ingredients": {"type": "array", "items": {"type": "string"}},
+                "allergens": {"type": "array", "items": {"type": "string"}},
+                "product_id": {"type": "string"},
+                "description": {"type": "string"},
+                "url": {"type": "string"},
+                "image_url": {"type": "string"},
+                "nutritional_info": {
+                    "type": "object",
+                    "properties": {
+                        "calories_per_100g": {"type": "number"},
+                        "protein_g": {"type": "number"},
+                        "carbs_g": {"type": "number"},
+                        "fat_g": {"type": "number"},
+                        "fiber_g": {"type": "number"},
+                        "sugar_g": {"type": "number"},
+                        "salt_g": {"type": "number"},
+                        "vitamins": {
+                            "type": "object",
+                            "properties": {
+                                "vitamin_a_mcg": {"type": "number"},
+                                "vitamin_c_mg": {"type": "number"},
+                                "vitamin_d_mcg": {"type": "number"},
+                                "vitamin_e_mg": {"type": "number"},
+                                "vitamin_k_mcg": {"type": "number"},
+                                "thiamin_mg": {"type": "number"},
+                                "riboflavin_mg": {"type": "number"},
+                                "niacin_mg": {"type": "number"},
+                                "vitamin_b6_mg": {"type": "number"},
+                                "folate_mcg": {"type": "number"},
+                                "vitamin_b12_mcg": {"type": "number"}
+                            }
+                        },
+                        "minerals": {
+                            "type": "object",
+                            "properties": {
+                                "calcium_mg": {"type": "number"},
+                                "iron_mg": {"type": "number"},
+                                "magnesium_mg": {"type": "number"},
+                                "phosphorus_mg": {"type": "number"},
+                                "potassium_mg": {"type": "number"},
+                                "sodium_mg": {"type": "number"},
+                                "zinc_mg": {"type": "number"},
+                                "selenium_mcg": {"type": "number"}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        # Create extraction chain
+        extraction_chain = create_extraction_chain(
+            schema=product_schema,
+            # schema=self.recipe_searcher.schema_extract_recipe_data,
+            llm=llm
+        )
+
+        # Search for product listing
+        query = f"{product_name} {supermarket_name} grocery product page"
+        search_results = await self.recipe_searcher.search_tool.ainvoke({"query": query})
+
+        # Process search results
+        for result in search_results:
+            url = result.get("url", "")
+            if not url or not self._is_valid_supermarket_url(url, supermarket_name):
+                continue
+
+            try:
+                # Load and process the product page
+                loader = lcdl.AsyncChromiumLoader([url])
+                docs = await loader.aload()
+
+                # Extract product data
+                html_content = "\n".join(doc.page_content for doc in docs)
+                extraction_result = await extraction_chain.ainvoke({"input": html_content})
+
+                if not extraction_result or not extraction_result.get('text'):
+                    continue
+
+                product_data = extraction_result['text'][0]
+                product = SupermarketProduct(**product_data)
+                product.url = url
+
+                # Confirm with user
+                print("\nFound product details:")
+                print(f"Name: {product.product_name}")
+                print(f"Price: £{product.price}")
+                print(f"Ingredients: {', '.join(product.ingredients)}")
+                print(f"URL: {product.url}")
+
+                if input("\nIs this the correct product? (y/n): ").lower() == 'y':
+                    # Save to database
+                    await self._save_product_to_db(product)
+
+                    # Add to FAISS index
+                    product_text = self._product_to_text(product)
+                    self.recipe_searcher.recipe_store.add_texts(
+                        [product_text],
+                        metadatas=[product.model_dump()]
+                    )
+
+                    return product
+
+            except Exception as e:
+                logging.error(f"Error processing product URL {url}: {e}")
+                continue
+
+        raise ValueError(f"Could not find valid product listing for {
+                         product_name} at {supermarket_name}")
+
+    def _is_valid_supermarket_url(self, url: str, supermarket_name: str) -> bool:
+        """Check if URL is from the specified supermarket."""
+        supermarket_domains = {
+            "tesco": ["tesco.com"],
+            "sainsburys": ["sainsburys.co.uk"],
+            "asda": ["asda.com"],
+            "morrisons": ["morrisons.com"],
+            "waitrose": ["waitrose.com"],
+            "aldi": ["aldi.co.uk"],
+            "lidl": ["lidl.co.uk"]
+        }
+
+        domain = urlparse(url).netloc
+        return any(domain.endswith(d) for d in supermarket_domains.get(supermarket_name.lower(), []))
+
+    async def _save_product_to_db(self, product: SupermarketProduct):
+        """Save product information to database."""
+        # Create products table if it doesn't exist
+        self.recipe_searcher.persistent_cursor.execute('''
+            CREATE TABLE IF NOT EXISTS products (
+                url TEXT PRIMARY KEY,
+                product_name TEXT,
+                price REAL,
+                price_per_unit TEXT,
+                ingredients TEXT,
+                allergens TEXT,
+                product_id TEXT,
+                description TEXT,
+                image_url TEXT,
+                nutritional_info TEXT,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # Insert or update product data
+        self.recipe_searcher.persistent_cursor.execute('''
+            INSERT OR REPLACE INTO products (
+                url, product_name, price, price_per_unit, ingredients,
+                allergens, product_id, description, image_url, nutritional_info,
+                last_updated
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            product.url,
+            product.product_name,
+            product.price,
+            product.price_per_unit,
+            json.dumps(product.ingredients),
+            json.dumps(product.allergens),
+            product.product_id,
+            product.description,
+            product.image_url,
+            product.nutritional_info.model_dump_json(),
+            datetime.datetime.now().isoformat()
+        ))
+
+        self.recipe_searcher.persistent_conn.commit()
+
+    def _product_to_text(self, product: SupermarketProduct) -> str:
+        """Convert product data to searchable text format."""
+        return f"""
+        Product: {product.product_name}
+        Price: £{product.price}
+        Description: {product.description}
+        Ingredients: {', '.join(product.ingredients)}
+        Allergens: {', '.join(product.allergens)}
+        Nutrition per 100g:
+        - Calories: {product.nutritional_info.calories_per_100g}
+        - Protein: {product.nutritional_info.protein_g}g
+        - Carbs: {product.nutritional_info.carbs_g}g
+        - Fat: {product.nutritional_info.fat_g}g
+        """
 
 
 if __name__ == "__main__":
