@@ -84,7 +84,7 @@ idna==3.10
 importlib_metadata==8.5.0
 importlib_resources==6.4.5
 jieba==0.42.1
-Jinja2==3.1.4
+Jinja2==3.1.5
 jiter==0.7.1
 joblib==1.4.2
 jq==1.8.0
